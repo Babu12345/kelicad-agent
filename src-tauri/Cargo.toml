@@ -1,0 +1,38 @@
+[package]
+name = "kelicad-agent"
+version = "1.0.0"
+description = "Local simulation agent for KeliCAD"
+authors = ["Wanyeki Technologies LLC <support@kelicad.com>"]
+license = "LicenseRef-Proprietary"
+repository = "https://github.com/Babu12345/kelicad-agent"
+homepage = "https://kelicad.com"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+byteorder = "1"
+encoding_rs = "0.8"
+regex = "1"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

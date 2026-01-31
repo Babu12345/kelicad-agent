@@ -1,0 +1,77 @@
+KeliCAD Agent - Proprietary License
+
+Copyright (c) 2024-2025 Wanyeki Technologies LLC. All rights reserved.
+
+TERMS AND CONDITIONS
+
+1. DEFINITIONS
+
+"Software" means the KeliCAD Agent source code, binaries, documentation, and
+associated files contained in this repository.
+
+"You" means the individual or entity accessing or using the Software.
+
+2. SOURCE CODE ACCESS
+
+The source code of this Software is made publicly available for transparency
+and security review purposes. You may:
+
+  - View and read the source code
+  - Fork the repository for personal reference
+  - Report security vulnerabilities or bugs
+  - Suggest improvements via issues or pull requests
+
+3. RESTRICTIONS
+
+You may NOT:
+
+  - Use the Software or any portion thereof in any commercial product or service
+  - Modify, adapt, or create derivative works of the Software for distribution
+  - Redistribute the Software, in whole or in part, in any form
+  - Remove or alter any copyright notices, license terms, or attributions
+  - Use the Software to compete with KeliCAD or Wanyeki Technologies LLC
+  - Sublicense, sell, rent, lease, or otherwise transfer rights to the Software
+
+4. AUTHORIZED USE
+
+You ARE permitted to:
+
+  - Download and run the official compiled binaries from KeliCAD for personal
+    use with a valid KeliCAD subscription
+  - Build and run the Software locally for personal, non-commercial use with
+    a valid KeliCAD subscription
+  - Review the source code for security auditing and transparency purposes
+
+5. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+WANYEKI TECHNOLOGIES LLC OR ITS AFFILIATES BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+6. TERMINATION
+
+This license is effective until terminated. Your rights under this license
+will terminate automatically without notice if you fail to comply with any
+of its terms. Upon termination, you must destroy all copies of the Software
+in your possession.
+
+7. GOVERNING LAW
+
+This license shall be governed by and construed in accordance with the laws
+of the State of Delaware, United States, without regard to its conflict of
+law provisions.
+
+8. CONTACT
+
+For licensing inquiries, please contact:
+Wanyeki Technologies LLC
+Email: babs@wanyekitech.com
+
+---
+
+This is proprietary software. The source code is provided for transparency
+only. If you have security concerns or questions, please contact us.

@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KeliCAD Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+            min-height: 100vh;
+            user-select: none;
+        }
+
+        .container {
+            max-width: 360px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .icon {
+            width: 24px;
+            height: 24px;
+            background: #22c55e;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon svg {
+            width: 16px;
+            height: 16px;
+            stroke: white;
+            fill: none;
+            stroke-width: 2;
+        }
+
+        .status-card {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .status-card-header {
+            font-size: 12px;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #3a3a3a;
+        }
+
+        .status-row:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            font-size: 14px;
+            color: #888;
+        }
+
+        .status-value {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .status-connected {
+            color: #22c55e;
+        }
+
+        .status-ready {
+            color: #22c55e;
+        }
+
+        .status-disconnected {
+            color: #888;
+        }
+
+        .status-error {
+            color: #ef4444;
+        }
+
+        .status-busy {
+            color: #3b82f6;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-success {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+
+        .badge-warning {
+            background: rgba(234, 179, 8, 0.2);
+            color: #eab308;
+        }
+
+        .badge-error {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .badge-blue {
+            background: rgba(59, 130, 246, 0.2);
+            color: #3b82f6;
+        }
+
+        .path-value {
+            font-size: 11px;
+            color: #666;
+            word-break: break-all;
+            margin-top: 4px;
+            font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .stat-box {
+            background: #333;
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .info-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 16px;
+            line-height: 1.5;
+        }
+
+        .footer {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            text-align: center;
+        }
+
+        .version {
+            font-size: 11px;
+            color: #555;
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .refresh-hint {
+            font-size: 10px;
+            color: #555;
+            text-align: center;
+            margin-top: 8px;
+        }
+
+        .install-hint {
+            font-size: 12px;
+            color: #888;
+            line-height: 1.5;
+            margin-top: 8px;
+            padding: 10px;
+            background: rgba(234, 179, 8, 0.1);
+            border-radius: 6px;
+            border: 1px solid rgba(234, 179, 8, 0.3);
+        }
+
+        .install-link {
+            display: block;
+            margin-top: 8px;
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .install-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            <div class="icon">
+                <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                    <path d="M2 17l10 5 10-5"/>
+                    <path d="M2 12l10 5 10-5"/>
+                </svg>
+            </div>
+            KeliCAD Agent
+        </h1>
+
+        <!-- Server Status -->
+        <div class="status-card">
+            <div class="status-card-header">Server Status</div>
+            <div class="status-row">
+                <span class="status-label">Status</span>
+                <span class="badge badge-success" id="status-badge">Running</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">WebSocket Port</span>
+                <span class="status-value" id="ws-port">9347</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Active Connections</span>
+                <span class="status-value" id="connections">0</span>
+            </div>
+        </div>
+
+        <!-- LTspice Status -->
+        <div class="status-card">
+            <div class="status-card-header">LTspice</div>
+            <div class="status-row">
+                <span class="status-label">Status</span>
+                <span class="badge" id="ltspice-badge">Checking...</span>
+            </div>
+            <div class="status-row" id="ltspice-path-row" style="display: none;">
+                <div style="width: 100%;">
+                    <span class="status-label">Path</span>
+                    <div class="path-value" id="ltspice-path"></div>
+                </div>
+            </div>
+            <div class="status-row" id="ltspice-install-row" style="display: none;">
+                <div style="width: 100%;">
+                    <div class="install-hint">
+                        LTspice must be installed separately.
+                        <a href="https://www.analog.com/en/design-center/design-tools-and-calculators/ltspice-simulator.html"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           class="install-link">
+                            Download from Analog Devices →
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Simulation Stats -->
+        <div class="status-card">
+            <div class="status-card-header">Simulation Stats</div>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-value" id="sim-count">0</div>
+                    <div class="stat-label">Simulations Run</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="sim-status">Idle</div>
+                    <div class="stat-label">Current Status</div>
+                </div>
+            </div>
+            <div id="last-sim-row" class="status-row" style="display: none; margin-top: 12px;">
+                <span class="status-label">Last Simulation</span>
+                <span class="status-value" id="last-sim-time">-</span>
+            </div>
+        </div>
+
+        <div class="info-text">
+            Keep this application running in the background to enable local LTspice simulations from KeliCAD.
+        </div>
+        <div class="refresh-hint">Status updates every 2 seconds</div>
+    </div>
+
+    <div class="footer">
+        <span class="version" id="version-text">Version 1.0.0</span>
+    </div>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+
+        async function updateStatus() {
+            try {
+                const status = await invoke('get_agent_status');
+
+                // Update server status
+                document.getElementById('ws-port').textContent = status.ws_port;
+                document.getElementById('connections').textContent = status.ws_connections;
+
+                // Update LTspice status
+                const ltspiceBadge = document.getElementById('ltspice-badge');
+                const ltspicePathRow = document.getElementById('ltspice-path-row');
+                const ltspicePath = document.getElementById('ltspice-path');
+
+                const ltspiceInstallRow = document.getElementById('ltspice-install-row');
+
+                if (status.ltspice_available) {
+                    ltspiceBadge.textContent = 'Available';
+                    ltspiceBadge.className = 'badge badge-success';
+                    ltspicePathRow.style.display = 'flex';
+                    ltspicePath.textContent = status.ltspice_path;
+                    ltspiceInstallRow.style.display = 'none';
+                } else {
+                    ltspiceBadge.textContent = 'Not Installed';
+                    ltspiceBadge.className = 'badge badge-warning';
+                    ltspicePathRow.style.display = 'none';
+                    ltspiceInstallRow.style.display = 'block';
+                }
+
+                // Update simulation stats
+                document.getElementById('sim-count').textContent = status.simulation_count;
+
+                const simStatus = document.getElementById('sim-status');
+                if (status.is_simulating) {
+                    simStatus.textContent = 'Running';
+                    simStatus.className = 'stat-value pulse';
+                    simStatus.style.color = '#3b82f6';
+                } else {
+                    simStatus.textContent = 'Idle';
+                    simStatus.className = 'stat-value';
+                    simStatus.style.color = '#22c55e';
+                }
+
+                // Update last simulation time
+                const lastSimRow = document.getElementById('last-sim-row');
+                const lastSimTime = document.getElementById('last-sim-time');
+                if (status.last_simulation_time) {
+                    lastSimRow.style.display = 'flex';
+                    const date = new Date(status.last_simulation_time);
+                    lastSimTime.textContent = formatRelativeTime(date);
+                } else {
+                    lastSimRow.style.display = 'none';
+                }
+
+                // Update version
+                document.getElementById('version-text').textContent = `Version ${status.version}`;
+
+            } catch (error) {
+                console.error('Failed to get agent status:', error);
+            }
+        }
+
+        function formatRelativeTime(date) {
+            const now = new Date();
+            const diffMs = now - date;
+            const diffSecs = Math.floor(diffMs / 1000);
+            const diffMins = Math.floor(diffSecs / 60);
+            const diffHours = Math.floor(diffMins / 60);
+
+            if (diffSecs < 60) {
+                return 'Just now';
+            } else if (diffMins < 60) {
+                return `${diffMins}m ago`;
+            } else if (diffHours < 24) {
+                return `${diffHours}h ago`;
+            } else {
+                return date.toLocaleDateString();
+            }
+        }
+
+        // Initial update
+        document.addEventListener('DOMContentLoaded', () => {
+            updateStatus();
+            // Update every 2 seconds
+            setInterval(updateStatus, 2000);
+        });
+    </script>
+</body>
+</html>

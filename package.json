@@ -1,0 +1,24 @@
+{
+  "name": "kelicad-agent",
+  "version": "1.0.0",
+  "description": "Local simulation agent for KeliCAD - runs LTspice on your computer",
+  "author": "Wanyeki Technologies LLC <support@kelicad.com>",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://kelicad.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Babu12345/kelicad-agent"
+  },
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  }
+}
