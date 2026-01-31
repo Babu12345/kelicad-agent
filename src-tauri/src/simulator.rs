@@ -12,7 +12,7 @@ use tempfile::Builder;
 
 use crate::protocol::{SimulationResults, Trace};
 
-/// Standard libraries bundled with the agent
+/// Standard libraries bundled with the agent (fallback)
 const STANDARD_LIBRARIES: &[&str] = &["LTC3.lib"];
 
 /// Known LTspice installation paths on Windows
@@ -24,10 +24,28 @@ const LTSPICE_PATHS_WINDOWS: &[&str] = &[
     r"C:\Program Files (x86)\LTC\LTspice\LTspice.exe",
 ];
 
+/// Known LTspice library paths on Windows
+#[cfg(windows)]
+const LTSPICE_LIB_PATHS_WINDOWS: &[&str] = &[
+    r"C:\Program Files\LTC\LTspiceXVII\lib",
+    r"C:\Program Files\LTC\LTspice\lib",
+    r"C:\Program Files (x86)\LTC\LTspiceXVII\lib",
+    r"C:\Program Files (x86)\LTC\LTspice\lib",
+    r"C:\Users\Public\Documents\LTspiceXVII\lib",
+];
+
 /// Known LTspice installation paths on macOS
 #[cfg(target_os = "macos")]
 const LTSPICE_PATHS_MACOS: &[&str] = &[
     "/Applications/LTspice.app/Contents/MacOS/LTspice",
+];
+
+/// Known LTspice library paths on macOS
+#[cfg(target_os = "macos")]
+const LTSPICE_LIB_PATHS_MACOS: &[&str] = &[
+    "/Applications/LTspice.app/Contents/Resources/lib",
+    "~/Library/Application Support/LTspice/lib",
+    "~/Documents/LTspiceXVII/lib",
 ];
 
 /// Detect LTspice installation
@@ -62,6 +80,73 @@ pub fn detect_ltspice() -> Option<String> {
         }
     }
 
+    None
+}
+
+/// Detect LTspice library directory
+pub fn detect_ltspice_lib_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        for path in LTSPICE_LIB_PATHS_WINDOWS {
+            let p = PathBuf::from(path);
+            if p.exists() && p.is_dir() {
+                log::info!("Found LTspice library directory: {:?}", p);
+                return Some(p);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in LTSPICE_LIB_PATHS_MACOS {
+            // Expand ~ to home directory
+            let expanded = if path.starts_with("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    home.join(&path[2..])
+                } else {
+                    PathBuf::from(path)
+                }
+            } else {
+                PathBuf::from(path)
+            };
+
+            if expanded.exists() && expanded.is_dir() {
+                log::info!("Found LTspice library directory: {:?}", expanded);
+                return Some(expanded);
+            }
+        }
+    }
+
+    // Try to find lib directory relative to LTspice executable
+    if let Some(ltspice_path) = detect_ltspice() {
+        let exe_path = PathBuf::from(&ltspice_path);
+
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS: /Applications/LTspice.app/Contents/MacOS/LTspice -> /Applications/LTspice.app/Contents/Resources/lib
+            if let Some(contents_dir) = exe_path.parent().and_then(|p| p.parent()) {
+                let lib_dir = contents_dir.join("Resources").join("lib");
+                if lib_dir.exists() {
+                    log::info!("Found LTspice library directory relative to exe: {:?}", lib_dir);
+                    return Some(lib_dir);
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows: C:\Program Files\LTC\LTspice\LTspice.exe -> C:\Program Files\LTC\LTspice\lib
+            if let Some(exe_dir) = exe_path.parent() {
+                let lib_dir = exe_dir.join("lib");
+                if lib_dir.exists() {
+                    log::info!("Found LTspice library directory relative to exe: {:?}", lib_dir);
+                    return Some(lib_dir);
+                }
+            }
+        }
+    }
+
+    log::warn!("Could not find LTspice library directory");
     None
 }
 
@@ -117,7 +202,7 @@ fn get_resources_dir() -> Option<PathBuf> {
 }
 
 /// Process .include and .lib directives in the netlist
-/// Copies standard library files to the temp directory and updates paths
+/// Resolves library files from LTspice's library directory or bundled resources
 fn process_includes(
     netlist: &str,
     temp_dir: &std::path::Path,
@@ -129,6 +214,7 @@ fn process_includes(
     let include_pattern = Regex::new(r#"(?im)^\s*\.(?:include|lib)\s+(.+?)\s*$"#)?;
 
     let resources_dir = get_resources_dir();
+    let ltspice_lib_dir = detect_ltspice_lib_dir();
 
     for cap in include_pattern.captures_iter(netlist) {
         let full_match = cap.get(0).unwrap().as_str();
@@ -140,7 +226,31 @@ fn process_includes(
             .and_then(|n| n.to_str())
             .unwrap_or(path_str);
 
-        // Check if this is a standard library we bundle
+        // Check if the path is absolute and exists
+        let path_as_is = PathBuf::from(path_str);
+        if path_as_is.is_absolute() && path_as_is.exists() {
+            log::info!("Using absolute library path: {:?}", path_as_is);
+            continue; // Keep as-is, LTspice will find it
+        }
+
+        // Try to find the library in LTspice's lib directory (search recursively)
+        if let Some(ref lib_dir) = ltspice_lib_dir {
+            if let Some(found_path) = find_library_file(lib_dir, file_name) {
+                // Copy the library to temp dir to ensure LTspice can access it
+                let dest_path = temp_dir.join(file_name);
+                if std::fs::copy(&found_path, &dest_path).is_ok() {
+                    copied_files.push(file_name.to_string());
+                    processed_netlist = processed_netlist.replace(
+                        full_match,
+                        &format!(".include {}", file_name),
+                    );
+                    log::info!("Copied LTspice library: {:?} -> {:?}", found_path, dest_path);
+                    continue;
+                }
+            }
+        }
+
+        // Fallback: check if this is a standard library we bundle
         if STANDARD_LIBRARIES.contains(&file_name) {
             if let Some(ref res_dir) = resources_dir {
                 let src_path = res_dir.join(file_name);
@@ -156,17 +266,86 @@ fn process_includes(
                         &format!(".include {}", file_name),
                     );
 
-                    log::info!("Copied standard library: {} -> {:?}", file_name, dest_path);
-                } else {
-                    log::warn!("Standard library not found: {:?}", src_path);
+                    log::info!("Copied bundled library: {} -> {:?}", file_name, dest_path);
+                    continue;
                 }
-            } else {
-                log::warn!("Resources directory not found, cannot copy library: {}", file_name);
+            }
+        }
+
+        log::warn!("Library not found: {} - simulation may fail", file_name);
+    }
+
+    Ok((processed_netlist, copied_files))
+}
+
+/// Recursively search for a library file in a directory
+fn find_library_file(dir: &PathBuf, file_name: &str) -> Option<PathBuf> {
+    find_library_file_recursive(dir, file_name, 0, 4)
+}
+
+/// Recursively search for a library file with depth limit
+fn find_library_file_recursive(dir: &PathBuf, file_name: &str, depth: usize, max_depth: usize) -> Option<PathBuf> {
+    if depth > max_depth {
+        return None;
+    }
+
+    // First check directly in the directory
+    let direct_path = dir.join(file_name);
+    if direct_path.exists() {
+        return Some(direct_path);
+    }
+
+    // Check subdirectories
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find_library_file_recursive(&path, file_name, depth + 1, max_depth) {
+                    return Some(found);
+                }
             }
         }
     }
 
-    Ok((processed_netlist, copied_files))
+    None
+}
+
+/// List available libraries from LTspice's library directory
+pub fn list_available_libraries() -> Vec<String> {
+    let mut libraries = Vec::new();
+
+    if let Some(lib_dir) = detect_ltspice_lib_dir() {
+        collect_library_files(&lib_dir, &mut libraries, 0, 3);
+    }
+
+    // Sort and deduplicate
+    libraries.sort();
+    libraries.dedup();
+    libraries
+}
+
+/// Recursively collect library files from a directory
+fn collect_library_files(dir: &PathBuf, libraries: &mut Vec<String>, depth: usize, max_depth: usize) {
+    if depth > max_depth {
+        return;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_library_files(&path, libraries, depth + 1, max_depth);
+            } else if let Some(ext) = path.extension() {
+                let ext_str = ext.to_string_lossy().to_lowercase();
+                // Common library file extensions
+                if ext_str == "lib" || ext_str == "sub" || ext_str == "mod" || ext_str == "inc" {
+                    if let Some(file_name) = path.file_name() {
+                        libraries.push(file_name.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
 }
 
 use std::sync::Arc;

@@ -127,6 +127,11 @@ async fn handle_connection(
                             let response = handle_cancel(&request, &state).await;
                             Some(serde_json::to_string(&response)?)
                         }
+                        "list_libraries" => {
+                            let _request: ListLibrariesRequest = serde_json::from_str(&text)?;
+                            let response = handle_list_libraries().await;
+                            Some(serde_json::to_string(&response)?)
+                        }
                         _ => {
                             log::warn!("Unknown message type: {}", generic.msg_type);
                             continue;
@@ -415,5 +420,25 @@ fn kill_process(pid: u32) {
             .output();
 
         log::info!("Sent taskkill to process {}", pid);
+    }
+}
+
+/// Handle list libraries request
+async fn handle_list_libraries() -> ListLibrariesResponse {
+    log::info!("Listing available libraries");
+
+    let lib_path = simulator::detect_ltspice_lib_dir();
+    let libraries = simulator::list_available_libraries();
+
+    log::info!("Found {} libraries", libraries.len());
+
+    ListLibrariesResponse {
+        id: uuid::Uuid::new_v4().to_string(),
+        msg_type: "list_libraries_response".to_string(),
+        timestamp: now_ms(),
+        success: true,
+        libraries,
+        lib_path: lib_path.map(|p| p.to_string_lossy().to_string()),
+        error: None,
     }
 }

@@ -150,6 +150,30 @@ pub struct CancelResponse {
     pub success: bool,
 }
 
+/// List libraries request
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListLibrariesRequest {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub timestamp: u64,
+}
+
+/// List libraries response
+#[derive(Debug, Clone, Serialize)]
+pub struct ListLibrariesResponse {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub timestamp: u64,
+    pub success: bool,
+    pub libraries: Vec<String>,
+    #[serde(rename = "libPath", skip_serializing_if = "Option::is_none")]
+    pub lib_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Generic message for type detection
 #[derive(Debug, Clone, Deserialize)]
 pub struct GenericMessage {
