@@ -69,19 +69,34 @@ const LTSPICE_LIB_PATHS_MACOS: &[&str] = &[
 /// Known ngspice library paths on Windows
 #[cfg(windows)]
 const NGSPICE_LIB_PATHS_WINDOWS: &[&str] = &[
+    // ngspice installation directories
     r"C:\Program Files\ngspice\share\ngspice\scripts",
     r"C:\Program Files (x86)\ngspice\share\ngspice\scripts",
     r"C:\Spice64\share\ngspice\scripts",
     r"C:\Spice\share\ngspice\scripts",
+    // Common user model directories
+    r"C:\ngspice\lib",
+    r"C:\ngspice\models",
 ];
 
 /// Known ngspice library paths on macOS
 #[cfg(target_os = "macos")]
 const NGSPICE_LIB_PATHS_MACOS: &[&str] = &[
+    // ngspice installation directories
     "/opt/homebrew/share/ngspice/scripts",
     "/usr/local/share/ngspice/scripts",
     "/opt/local/share/ngspice/scripts",
     "/opt/homebrew/Cellar/ngspice/*/share/ngspice/scripts",
+    // User model directories
+    "~/ngspice/lib",
+    "~/ngspice/models",
+    "~/.ngspice/lib",
+    "~/.ngspice/models",
+    "~/Documents/ngspice/lib",
+    "~/Documents/ngspice/models",
+    // System-wide model directories
+    "/usr/local/share/ngspice/lib",
+    "/opt/homebrew/share/ngspice/lib",
 ];
 
 /// Detect LTspice installation
@@ -521,11 +536,13 @@ pub fn list_ltspice_libraries() -> Vec<String> {
     libraries
 }
 
-/// List available libraries/scripts from ngspice's directory
+/// List available libraries/scripts from all ngspice directories
 pub fn list_ngspice_libraries() -> Vec<String> {
     let mut libraries = Vec::new();
 
-    if let Some(lib_dir) = detect_ngspice_lib_dir() {
+    // Collect from all known ngspice library paths
+    let all_paths = get_all_ngspice_lib_dirs();
+    for lib_dir in all_paths {
         collect_ngspice_files(&lib_dir, &mut libraries, 0, 3);
     }
 
@@ -533,6 +550,72 @@ pub fn list_ngspice_libraries() -> Vec<String> {
     libraries.sort();
     libraries.dedup();
     libraries
+}
+
+/// Get all existing ngspice library directories
+fn get_all_ngspice_lib_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    #[cfg(windows)]
+    {
+        for path in NGSPICE_LIB_PATHS_WINDOWS {
+            let p = PathBuf::from(path);
+            if p.exists() && p.is_dir() {
+                dirs.push(p);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in NGSPICE_LIB_PATHS_MACOS {
+            // Expand ~ to home directory
+            let expanded = if path.starts_with("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    home.join(&path[2..])
+                } else {
+                    continue;
+                }
+            } else if path.contains('*') {
+                // Handle glob patterns for Cellar paths
+                if let Some(found) = expand_glob_path(path) {
+                    found
+                } else {
+                    continue;
+                }
+            } else {
+                PathBuf::from(path)
+            };
+
+            if expanded.exists() && expanded.is_dir() {
+                dirs.push(expanded);
+            }
+        }
+    }
+
+    // Also try relative to ngspice executable
+    if let Some(ngspice_path) = detect_ngspice() {
+        let exe_path = PathBuf::from(&ngspice_path);
+
+        // On Unix: /opt/homebrew/bin/ngspice -> /opt/homebrew/share/ngspice/scripts
+        if let Some(bin_dir) = exe_path.parent() {
+            if let Some(prefix) = bin_dir.parent() {
+                let scripts_dir = prefix.join("share").join("ngspice").join("scripts");
+                if scripts_dir.exists() && !dirs.contains(&scripts_dir) {
+                    dirs.push(scripts_dir);
+                }
+
+                // Also check for lib subdirectory
+                let lib_dir = prefix.join("share").join("ngspice").join("lib");
+                if lib_dir.exists() && !dirs.contains(&lib_dir) {
+                    dirs.push(lib_dir);
+                }
+            }
+        }
+    }
+
+    log::info!("Found {} ngspice library directories", dirs.len());
+    dirs
 }
 
 /// Recursively collect ngspice script files from a directory
