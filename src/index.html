@@ -289,6 +289,35 @@
             </div>
         </div>
 
+        <!-- ngspice Status -->
+        <div class="status-card">
+            <div class="status-card-header">ngspice</div>
+            <div class="status-row">
+                <span class="status-label">Status</span>
+                <span class="badge" id="ngspice-badge">Checking...</span>
+            </div>
+            <div class="status-row" id="ngspice-path-row" style="display: none;">
+                <div style="width: 100%;">
+                    <span class="status-label">Path</span>
+                    <div class="path-value" id="ngspice-path"></div>
+                </div>
+            </div>
+            <div class="status-row" id="ngspice-install-row" style="display: none;">
+                <div style="width: 100%;">
+                    <div class="install-hint">
+                        ngspice must be installed separately.
+                        <code style="display: block; margin: 8px 0; padding: 4px 8px; background: #333; border-radius: 4px; font-size: 11px;">brew install ngspice</code>
+                        <a href="https://ngspice.sourceforge.io/download.html"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           class="install-link">
+                            Or download from ngspice.sourceforge.io →
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Simulation Stats -->
         <div class="status-card">
             <div class="status-card-header">Simulation Stats</div>
@@ -309,7 +338,7 @@
         </div>
 
         <div class="info-text">
-            Keep this application running in the background to enable local LTspice simulations from KeliCAD.
+            Keep this application running in the background to enable local SPICE simulations from KeliCAD.
         </div>
         <div class="refresh-hint">Status updates every 2 seconds</div>
     </div>
@@ -347,6 +376,25 @@
                     ltspiceBadge.className = 'badge badge-warning';
                     ltspicePathRow.style.display = 'none';
                     ltspiceInstallRow.style.display = 'block';
+                }
+
+                // Update ngspice status
+                const ngspiceBadge = document.getElementById('ngspice-badge');
+                const ngspicePathRow = document.getElementById('ngspice-path-row');
+                const ngspicePath = document.getElementById('ngspice-path');
+                const ngspiceInstallRow = document.getElementById('ngspice-install-row');
+
+                if (status.ngspice_available) {
+                    ngspiceBadge.textContent = 'Available';
+                    ngspiceBadge.className = 'badge badge-success';
+                    ngspicePathRow.style.display = 'flex';
+                    ngspicePath.textContent = status.ngspice_path;
+                    ngspiceInstallRow.style.display = 'none';
+                } else {
+                    ngspiceBadge.textContent = 'Not Installed';
+                    ngspiceBadge.className = 'badge badge-warning';
+                    ngspicePathRow.style.display = 'none';
+                    ngspiceInstallRow.style.display = 'block';
                 }
 
                 // Update simulation stats
