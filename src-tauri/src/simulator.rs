@@ -2,18 +2,36 @@
 // This source code is licensed under the proprietary license found in the
 // LICENSE file in the root directory of this source tree.
 
-//! LTspice simulation execution and result parsing
+//! SPICE simulation execution and result parsing (LTspice and ngspice)
 
 use std::path::PathBuf;
 use std::process::Command;
 use encoding_rs::UTF_16LE;
 use regex::Regex;
 use tempfile::Builder;
+use std::io::{BufRead, BufReader};
 
 use crate::protocol::{SimulationResults, Trace};
 
 /// Standard libraries bundled with the agent (fallback)
 const STANDARD_LIBRARIES: &[&str] = &["LTC3.lib"];
+
+/// Known ngspice installation paths on Windows
+#[cfg(windows)]
+const NGSPICE_PATHS_WINDOWS: &[&str] = &[
+    r"C:\Program Files\ngspice\bin\ngspice.exe",
+    r"C:\Program Files (x86)\ngspice\bin\ngspice.exe",
+    r"C:\Spice64\bin\ngspice.exe",
+    r"C:\Spice\bin\ngspice.exe",
+];
+
+/// Known ngspice installation paths on macOS
+#[cfg(target_os = "macos")]
+const NGSPICE_PATHS_MACOS: &[&str] = &[
+    "/opt/homebrew/bin/ngspice",
+    "/usr/local/bin/ngspice",
+    "/opt/local/bin/ngspice",
+];
 
 /// Known LTspice installation paths on Windows
 #[cfg(windows)]
@@ -76,6 +94,65 @@ pub fn detect_ltspice() -> Option<String> {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {
                 return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect ngspice installation
+pub fn detect_ngspice() -> Option<String> {
+    #[cfg(windows)]
+    {
+        for path in NGSPICE_PATHS_WINDOWS {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                log::info!("Found ngspice at: {}", path);
+                return Some(path.to_string());
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in NGSPICE_PATHS_MACOS {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                log::info!("Found ngspice at: {}", path);
+                return Some(path.to_string());
+            }
+        }
+    }
+
+    // Also check PATH using 'which' on Unix or 'where' on Windows
+    #[cfg(unix)]
+    {
+        if let Ok(output) = Command::new("which").arg("ngspice").output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    log::info!("Found ngspice in PATH: {}", path);
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(output) = Command::new("where").arg("ngspice").output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .map(|s| s.trim().to_string());
+                if let Some(p) = path {
+                    if !p.is_empty() {
+                        log::info!("Found ngspice in PATH: {}", p);
+                        return Some(p);
+                    }
+                }
             }
         }
     }
@@ -424,6 +501,241 @@ pub async fn run_ltspice_simulation(
     let results = parse_raw_file(&raw_path)?;
 
     Ok(results)
+}
+
+/// Run an ngspice simulation
+/// The process_id_holder will be updated with the PID when the process starts
+pub async fn run_ngspice_simulation(
+    ngspice_path: &str,
+    netlist: &str,
+    _waveform_quality: &str,
+    process_id_holder: Option<Arc<AtomicU32>>,
+) -> Result<SimulationResults, Box<dyn std::error::Error + Send + Sync>> {
+    // Create temp directory with kelicad prefix
+    let temp_dir = Builder::new().prefix("kelicad-ngspice-").tempdir()?;
+    log::info!("Created temp directory for ngspice: {:?}", temp_dir.path());
+    let netlist_path = temp_dir.path().join("circuit.cir");
+    let raw_path = temp_dir.path().join("circuit.raw");
+
+    // Prepare netlist with .control section for raw output
+    let prepared_netlist = prepare_ngspice_netlist(netlist, &raw_path);
+    std::fs::write(&netlist_path, &prepared_netlist)?;
+
+    log::info!("Running ngspice simulation...");
+
+    // Run ngspice in batch mode
+    let output = tokio::task::spawn_blocking({
+        let ngspice_path = ngspice_path.to_string();
+        let netlist_path = netlist_path.clone();
+        move || {
+            let child = Command::new(&ngspice_path)
+                .arg("-b")  // batch mode
+                .arg(&netlist_path)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+
+            let pid = child.id();
+            log::info!("ngspice process started with PID: {}", pid);
+
+            // Store the PID in the holder if provided
+            if let Some(holder) = process_id_holder {
+                holder.store(pid, Ordering::SeqCst);
+            }
+
+            // Wait for the process to complete
+            let output = child.wait_with_output()?;
+            Ok::<_, std::io::Error>(output)
+        }
+    })
+    .await??;
+
+    // ngspice returns non-zero for various reasons, check stderr for actual errors
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Log output for debugging
+    if !stdout.is_empty() {
+        log::info!("ngspice stdout: {}", stdout);
+    }
+    if !stderr.is_empty() {
+        log::warn!("ngspice stderr: {}", stderr);
+    }
+
+    // Check for fatal errors in output
+    if stderr.to_lowercase().contains("error") || stdout.to_lowercase().contains("error:") {
+        // Check if it's a real error (not just "0 errors")
+        let error_lines: Vec<&str> = stdout.lines()
+            .chain(stderr.lines())
+            .filter(|l| l.to_lowercase().contains("error") && !l.contains("0 error"))
+            .collect();
+
+        if !error_lines.is_empty() {
+            return Err(format!("ngspice error: {}", error_lines.join("\n")).into());
+        }
+    }
+
+    // Check if raw file exists
+    if !raw_path.exists() {
+        return Err(format!(
+            "No .raw file generated - simulation may have failed.\nStdout: {}\nStderr: {}",
+            stdout, stderr
+        ).into());
+    }
+
+    // Parse the raw file (ngspice uses ASCII format by default)
+    log::info!("Parsing ngspice raw file: {:?}", raw_path);
+    let results = parse_ngspice_raw_file(&raw_path)?;
+
+    Ok(results)
+}
+
+/// Prepare netlist for ngspice with .control section
+fn prepare_ngspice_netlist(netlist: &str, raw_path: &PathBuf) -> String {
+    let mut lines: Vec<String> = netlist.lines().map(|s| s.to_string()).collect();
+
+    // Find the .end line
+    let end_idx = lines.iter().position(|l| l.trim().to_lowercase() == ".end");
+
+    // Check if there's already a .control section
+    let has_control = netlist.to_lowercase().contains(".control");
+
+    if !has_control {
+        // Add .control section before .end to write raw file
+        let raw_path_str = raw_path.to_string_lossy().replace('\\', "/");
+        let control_section = vec![
+            ".control".to_string(),
+            "run".to_string(),
+            format!("write \"{}\" all", raw_path_str),
+            "quit".to_string(),
+            ".endc".to_string(),
+        ];
+
+        if let Some(idx) = end_idx {
+            for (i, line) in control_section.into_iter().enumerate() {
+                lines.insert(idx + i, line);
+            }
+        } else {
+            // No .end found, append control section and .end
+            lines.extend(control_section);
+            lines.push(".end".to_string());
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Parse ngspice ASCII raw file format
+fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn std::error::Error + Send + Sync>> {
+    let file = std::fs::File::open(path)?;
+    let reader = BufReader::new(file);
+
+    let mut num_vars = 0;
+    let mut num_points = 0;
+    let mut variables: Vec<(String, String)> = Vec::new();
+    let mut in_variables = false;
+    let mut in_values = false;
+    let mut all_data: Vec<Vec<f64>> = Vec::new();
+    let mut current_point_data: Vec<f64> = Vec::new();
+    let mut analysis_type = "transient".to_string();
+
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+
+        if line.starts_with("Plotname:") {
+            let plotname = line.split(':').nth(1).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            if plotname.contains("ac") {
+                analysis_type = "ac".to_string();
+            } else if plotname.contains("dc") {
+                analysis_type = "dc".to_string();
+            } else {
+                analysis_type = "transient".to_string();
+            }
+        } else if line.starts_with("No. Variables:") {
+            if let Some(n) = line.split(':').nth(1) {
+                num_vars = n.trim().parse().unwrap_or(0);
+                all_data = vec![Vec::new(); num_vars];
+            }
+        } else if line.starts_with("No. Points:") {
+            if let Some(n) = line.split(':').nth(1) {
+                num_points = n.trim().parse().unwrap_or(0);
+            }
+        } else if line == "Variables:" {
+            in_variables = true;
+            in_values = false;
+        } else if line == "Values:" || line == "Binary:" {
+            in_variables = false;
+            in_values = true;
+        } else if in_variables && !line.is_empty() {
+            // Parse variable line: "0\ttime\ttime" or "0 time time"
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let name = parts[1].to_string();
+                let var_type = parts[2].to_string();
+                variables.push((name, var_type));
+            }
+        } else if in_values && !line.is_empty() {
+            // Parse value lines
+            // Format can be:
+            // "0  1.000000e+00" (point index followed by first value)
+            // "  2.000000e+00" (subsequent values for same point)
+
+            let parts: Vec<&str> = line.split_whitespace().collect();
+
+            for part in parts {
+                // Try to parse as a number
+                if let Ok(value) = part.parse::<f64>() {
+                    current_point_data.push(value);
+
+                    // If we have all values for a point, store them
+                    if current_point_data.len() == num_vars {
+                        for (i, &val) in current_point_data.iter().enumerate() {
+                            if i < all_data.len() {
+                                all_data[i].push(val);
+                            }
+                        }
+                        current_point_data.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("Parsed ngspice raw: num_vars={}, num_points={}, actual_points={}",
+               num_vars, num_points, all_data.get(0).map(|v| v.len()).unwrap_or(0));
+
+    if variables.is_empty() || all_data.is_empty() || all_data[0].is_empty() {
+        return Err("Could not parse ngspice raw file - no data found".into());
+    }
+
+    // Build results
+    let time = all_data.get(0).cloned().unwrap_or_default();
+
+    let traces: Vec<Trace> = variables
+        .iter()
+        .enumerate()
+        .skip(1) // Skip time variable
+        .map(|(i, (name, var_type))| {
+            let unit = match var_type.as_str() {
+                "voltage" => "V",
+                "current" => "A",
+                "time" => "s",
+                _ => "",
+            };
+            Trace {
+                name: name.clone(),
+                data: all_data.get(i).cloned().unwrap_or_default(),
+                unit: unit.to_string(),
+            }
+        })
+        .collect();
+
+    Ok(SimulationResults {
+        time,
+        traces,
+        analysis_type,
+    })
 }
 
 /// Prepare netlist with required directives for proper output

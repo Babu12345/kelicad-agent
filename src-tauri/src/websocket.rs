@@ -179,6 +179,7 @@ async fn handle_handshake(request: &HandshakeRequest, state: &AppState) -> Hands
             success: false,
             agent_version: AGENT_VERSION.to_string(),
             ltspice_path: None,
+            ngspice_path: None,
             capabilities: AgentCapabilities {
                 ltspice_available: false,
                 ngspice_available: false,
@@ -191,8 +192,11 @@ async fn handle_handshake(request: &HandshakeRequest, state: &AppState) -> Hands
 
     let ltspice_path = state.ltspice_path.read().await.clone();
     let ltspice_available = ltspice_path.is_some();
+    let ngspice_path = state.ngspice_path.read().await.clone();
+    let ngspice_available = ngspice_path.is_some();
 
-    log::info!("Handshake successful from: {}", request.origin);
+    log::info!("Handshake successful from: {} (LTspice: {}, ngspice: {})",
+               request.origin, ltspice_available, ngspice_available);
 
     HandshakeResponse {
         id: uuid::Uuid::new_v4().to_string(),
@@ -201,9 +205,10 @@ async fn handle_handshake(request: &HandshakeRequest, state: &AppState) -> Hands
         success: true,
         agent_version: AGENT_VERSION.to_string(),
         ltspice_path,
+        ngspice_path,
         capabilities: AgentCapabilities {
             ltspice_available,
-            ngspice_available: false,
+            ngspice_available,
             supported_analyses: vec![
                 "transient".to_string(),
                 "ac".to_string(),
@@ -218,6 +223,7 @@ async fn handle_handshake(request: &HandshakeRequest, state: &AppState) -> Hands
 /// Handle simulation request
 async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> SimulationResponse {
     let start_time = std::time::Instant::now();
+    let simulator_type = request.simulator.as_str();
 
     // Check if already simulating
     {
@@ -232,29 +238,55 @@ async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> Simul
                 results: None,
                 error: Some("Another simulation is already running".to_string()),
                 execution_time: 0,
-                simulator: "ltspice".to_string(),
+                simulator: simulator_type.to_string(),
             };
         }
     }
 
-    // Check if LTspice is available
-    let ltspice_path = state.ltspice_path.read().await.clone();
-    let ltspice_path = match ltspice_path {
-        Some(p) => p,
-        None => {
-            return SimulationResponse {
-                id: uuid::Uuid::new_v4().to_string(),
-                msg_type: "simulation_result".to_string(),
-                request_id: request.id.clone(),
-                timestamp: now_ms(),
-                success: false,
-                results: None,
-                error: Some("LTspice not found on this system".to_string()),
-                execution_time: 0,
-                simulator: "ltspice".to_string(),
-            };
+    // Get simulator path based on requested type
+    let (simulator_path, simulator_name) = match simulator_type {
+        "ngspice" => {
+            let ngspice_path = state.ngspice_path.read().await.clone();
+            match ngspice_path {
+                Some(p) => (p, "ngspice"),
+                None => {
+                    return SimulationResponse {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        msg_type: "simulation_result".to_string(),
+                        request_id: request.id.clone(),
+                        timestamp: now_ms(),
+                        success: false,
+                        results: None,
+                        error: Some("ngspice not found on this system. Install ngspice via Homebrew (brew install ngspice) or from ngspice.sourceforge.io".to_string()),
+                        execution_time: 0,
+                        simulator: "ngspice".to_string(),
+                    };
+                }
+            }
+        }
+        _ => {
+            // Default to LTspice
+            let ltspice_path = state.ltspice_path.read().await.clone();
+            match ltspice_path {
+                Some(p) => (p, "ltspice"),
+                None => {
+                    return SimulationResponse {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        msg_type: "simulation_result".to_string(),
+                        request_id: request.id.clone(),
+                        timestamp: now_ms(),
+                        success: false,
+                        results: None,
+                        error: Some("LTspice not found on this system".to_string()),
+                        execution_time: 0,
+                        simulator: "ltspice".to_string(),
+                    };
+                }
+            }
         }
     };
+
+    log::info!("Running simulation with {} at: {}", simulator_name, simulator_path);
 
     // Mark as simulating and set current simulation ID
     {
@@ -266,14 +298,27 @@ async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> Simul
         state.current_process_id.store(0, Ordering::SeqCst);
     }
 
-    // Run simulation with the process ID holder
-    let result = simulator::run_ltspice_simulation(
-        &ltspice_path,
-        &request.netlist,
-        &request.waveform_quality,
-        Some(state.current_process_id.clone()),
-    )
-    .await;
+    // Run simulation with the appropriate simulator
+    let result = match simulator_name {
+        "ngspice" => {
+            simulator::run_ngspice_simulation(
+                &simulator_path,
+                &request.netlist,
+                &request.waveform_quality,
+                Some(state.current_process_id.clone()),
+            )
+            .await
+        }
+        _ => {
+            simulator::run_ltspice_simulation(
+                &simulator_path,
+                &request.netlist,
+                &request.waveform_quality,
+                Some(state.current_process_id.clone()),
+            )
+            .await
+        }
+    };
 
     // Check if cancelled
     let was_cancelled = state.cancel_requested.load(Ordering::SeqCst);
@@ -299,7 +344,7 @@ async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> Simul
             results: None,
             error: Some("Simulation cancelled".to_string()),
             execution_time: start_time.elapsed().as_millis() as u64,
-            simulator: "ltspice".to_string(),
+            simulator: simulator_name.to_string(),
         };
     }
 
@@ -308,7 +353,8 @@ async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> Simul
     match result {
         Ok(results) => {
             log::info!(
-                "Simulation completed: {} traces, {} points",
+                "Simulation completed with {}: {} traces, {} points",
+                simulator_name,
                 results.traces.len(),
                 results.time.len()
             );
@@ -330,11 +376,11 @@ async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> Simul
                 results: Some(results),
                 error: None,
                 execution_time,
-                simulator: "ltspice".to_string(),
+                simulator: simulator_name.to_string(),
             }
         }
         Err(e) => {
-            log::error!("Simulation failed: {}", e);
+            log::error!("Simulation failed with {}: {}", simulator_name, e);
             SimulationResponse {
                 id: uuid::Uuid::new_v4().to_string(),
                 msg_type: "simulation_result".to_string(),
@@ -344,7 +390,7 @@ async fn handle_simulate(request: &SimulationRequest, state: &AppState) -> Simul
                 results: None,
                 error: Some(e.to_string()),
                 execution_time,
-                simulator: "ltspice".to_string(),
+                simulator: simulator_name.to_string(),
             }
         }
     }

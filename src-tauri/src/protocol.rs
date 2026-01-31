@@ -58,6 +58,8 @@ pub struct HandshakeResponse {
     pub agent_version: String,
     #[serde(rename = "ltspicePath", skip_serializing_if = "Option::is_none")]
     pub ltspice_path: Option<String>,
+    #[serde(rename = "ngspicePath", skip_serializing_if = "Option::is_none")]
+    pub ngspice_path: Option<String>,
     pub capabilities: AgentCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -72,8 +74,15 @@ pub struct SimulationRequest {
     pub netlist: String,
     #[serde(rename = "waveformQuality")]
     pub waveform_quality: String,
+    /// Which simulator to use: "ltspice" or "ngspice"
+    #[serde(default = "default_simulator")]
+    pub simulator: String,
     pub timeout: Option<u64>,
     pub timestamp: u64,
+}
+
+fn default_simulator() -> String {
+    "ltspice".to_string()
 }
 
 /// Simulation response to web app
@@ -268,9 +277,10 @@ mod tests {
             success: true,
             agent_version: "1.0.0".to_string(),
             ltspice_path: Some("/Applications/LTspice.app".to_string()),
+            ngspice_path: Some("/opt/homebrew/bin/ngspice".to_string()),
             capabilities: AgentCapabilities {
                 ltspice_available: true,
-                ngspice_available: false,
+                ngspice_available: true,
                 supported_analyses: vec!["transient".to_string(), "ac".to_string()],
                 max_simulation_time: 120,
             },
@@ -282,7 +292,9 @@ mod tests {
         assert!(json.contains("\"success\":true"));
         assert!(json.contains("\"agentVersion\":\"1.0.0\""));
         assert!(json.contains("\"ltspicePath\":\"/Applications/LTspice.app\""));
+        assert!(json.contains("\"ngspicePath\":\"/opt/homebrew/bin/ngspice\""));
         assert!(json.contains("\"ltspiceAvailable\":true"));
+        assert!(json.contains("\"ngspiceAvailable\":true"));
         // Error should be skipped when None
         assert!(!json.contains("\"error\""));
     }
@@ -296,6 +308,7 @@ mod tests {
             success: false,
             agent_version: "1.0.0".to_string(),
             ltspice_path: None,
+            ngspice_path: None,
             capabilities: AgentCapabilities {
                 ltspice_available: false,
                 ngspice_available: false,
@@ -310,6 +323,7 @@ mod tests {
         assert!(json.contains("\"error\":\"Invalid origin\""));
         // ltspicePath should be skipped when None
         assert!(!json.contains("\"ltspicePath\""));
+        assert!(!json.contains("\"ngspicePath\""));
     }
 
     #[test]

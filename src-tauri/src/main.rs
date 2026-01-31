@@ -20,6 +20,7 @@ use tokio::sync::RwLock;
 
 pub struct AppState {
     pub ltspice_path: RwLock<Option<String>>,
+    pub ngspice_path: RwLock<Option<String>>,
     pub is_simulating: RwLock<bool>,
     pub ws_connections: RwLock<u32>,
     pub simulation_count: RwLock<u32>,
@@ -33,6 +34,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             ltspice_path: RwLock::new(None),
+            ngspice_path: RwLock::new(None),
             is_simulating: RwLock::new(false),
             ws_connections: RwLock::new(0),
             simulation_count: RwLock::new(0),
@@ -48,6 +50,8 @@ impl Default for AppState {
 struct AgentStatus {
     ltspice_path: Option<String>,
     ltspice_available: bool,
+    ngspice_path: Option<String>,
+    ngspice_available: bool,
     is_simulating: bool,
     ws_connections: u32,
     simulation_count: u32,
@@ -59,6 +63,7 @@ struct AgentStatus {
 #[tauri::command]
 async fn get_agent_status(state: State<'_, Arc<AppState>>) -> Result<AgentStatus, String> {
     let ltspice_path = state.ltspice_path.read().await.clone();
+    let ngspice_path = state.ngspice_path.read().await.clone();
     let is_simulating = *state.is_simulating.read().await;
     let ws_connections = *state.ws_connections.read().await;
     let simulation_count = *state.simulation_count.read().await;
@@ -67,6 +72,8 @@ async fn get_agent_status(state: State<'_, Arc<AppState>>) -> Result<AgentStatus
     Ok(AgentStatus {
         ltspice_available: ltspice_path.is_some(),
         ltspice_path,
+        ngspice_available: ngspice_path.is_some(),
+        ngspice_path,
         is_simulating,
         ws_connections,
         simulation_count,
@@ -87,15 +94,25 @@ fn main() {
         .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![get_agent_status])
         .setup(move |app| {
-            // Detect LTspice on startup
+            // Detect simulators on startup
             let state = app_state.clone();
             tauri::async_runtime::spawn(async move {
+                // Detect LTspice
                 if let Some(path) = simulator::detect_ltspice() {
                     let mut ltspice_path = state.ltspice_path.write().await;
-                    *ltspice_path = Some(path);
-                    log::info!("LTspice detected");
+                    *ltspice_path = Some(path.clone());
+                    log::info!("LTspice detected at: {}", path);
                 } else {
                     log::warn!("LTspice not found");
+                }
+
+                // Detect ngspice
+                if let Some(path) = simulator::detect_ngspice() {
+                    let mut ngspice_path = state.ngspice_path.write().await;
+                    *ngspice_path = Some(path.clone());
+                    log::info!("ngspice detected at: {}", path);
+                } else {
+                    log::warn!("ngspice not found");
                 }
             });
 
