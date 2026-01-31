@@ -62,6 +62,47 @@ npm run dev
 npm run build
 ```
 
+### Building for Distribution (macOS)
+
+To build a signed and notarized DMG for distribution:
+
+1. **Set up Apple Developer credentials:**
+   ```bash
+   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+   export APPLE_ID="your_apple_id@email.com"
+   export APPLE_PASSWORD="your_app_specific_password"  # From appleid.apple.com
+   export APPLE_TEAM_ID="YOUR_TEAM_ID"
+   ```
+
+2. **Run the build script:**
+   ```bash
+   ./scripts/build-macos.sh
+   ```
+
+This will:
+- Build the Tauri app with code signing
+- Create a DMG installer
+- Sign the DMG
+- Submit to Apple for notarization
+- Staple the notarization ticket
+- Copy to `public/downloads/`
+
+**Manual steps (if not using the script):**
+```bash
+# Build with signing
+APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" npx @tauri-apps/cli build
+
+# Create and sign DMG
+hdiutil create -volname "KeliCAD Agent" -srcfolder "src-tauri/target/release/bundle/macos/KeliCAD Agent.app" -ov -format UDZO "KeliCAD Agent.dmg"
+codesign --sign "$APPLE_SIGNING_IDENTITY" "KeliCAD Agent.dmg"
+
+# Notarize (requires ~1-5 minutes)
+xcrun notarytool submit "KeliCAD Agent.dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+
+# Staple the notarization ticket
+xcrun stapler staple "KeliCAD Agent.dmg"
+```
+
 ## Usage
 
 1. Install and launch the KeliCAD Agent
