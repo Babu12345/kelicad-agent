@@ -165,6 +165,9 @@ pub struct ListLibrariesRequest {
     pub id: String,
     #[serde(rename = "type")]
     pub msg_type: String,
+    /// Which simulator's libraries to list: "ltspice" or "ngspice" (defaults to ltspice)
+    #[serde(default = "default_simulator")]
+    pub simulator: String,
     pub timestamp: u64,
 }
 

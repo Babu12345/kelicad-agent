@@ -128,8 +128,8 @@ async fn handle_connection(
                             Some(serde_json::to_string(&response)?)
                         }
                         "list_libraries" => {
-                            let _request: ListLibrariesRequest = serde_json::from_str(&text)?;
-                            let response = handle_list_libraries().await;
+                            let request: ListLibrariesRequest = serde_json::from_str(&text)?;
+                            let response = handle_list_libraries(&request).await;
                             Some(serde_json::to_string(&response)?)
                         }
                         _ => {
@@ -470,13 +470,25 @@ fn kill_process(pid: u32) {
 }
 
 /// Handle list libraries request
-async fn handle_list_libraries() -> ListLibrariesResponse {
-    log::info!("Listing available libraries");
+async fn handle_list_libraries(request: &ListLibrariesRequest) -> ListLibrariesResponse {
+    let simulator_type = request.simulator.as_str();
+    log::info!("Listing available libraries for {}", simulator_type);
 
-    let lib_path = simulator::detect_ltspice_lib_dir();
-    let libraries = simulator::list_available_libraries();
+    let (lib_path, libraries) = match simulator_type {
+        "ngspice" => {
+            let path = simulator::detect_ngspice_lib_dir();
+            let libs = simulator::list_ngspice_libraries();
+            (path, libs)
+        }
+        _ => {
+            // Default to LTspice
+            let path = simulator::detect_ltspice_lib_dir();
+            let libs = simulator::list_ltspice_libraries();
+            (path, libs)
+        }
+    };
 
-    log::info!("Found {} libraries", libraries.len());
+    log::info!("Found {} libraries for {}", libraries.len(), simulator_type);
 
     ListLibrariesResponse {
         id: uuid::Uuid::new_v4().to_string(),

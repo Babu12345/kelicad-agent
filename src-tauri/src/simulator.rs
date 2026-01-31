@@ -66,6 +66,24 @@ const LTSPICE_LIB_PATHS_MACOS: &[&str] = &[
     "~/Documents/LTspiceXVII/lib",
 ];
 
+/// Known ngspice library paths on Windows
+#[cfg(windows)]
+const NGSPICE_LIB_PATHS_WINDOWS: &[&str] = &[
+    r"C:\Program Files\ngspice\share\ngspice\scripts",
+    r"C:\Program Files (x86)\ngspice\share\ngspice\scripts",
+    r"C:\Spice64\share\ngspice\scripts",
+    r"C:\Spice\share\ngspice\scripts",
+];
+
+/// Known ngspice library paths on macOS
+#[cfg(target_os = "macos")]
+const NGSPICE_LIB_PATHS_MACOS: &[&str] = &[
+    "/opt/homebrew/share/ngspice/scripts",
+    "/usr/local/share/ngspice/scripts",
+    "/opt/local/share/ngspice/scripts",
+    "/opt/homebrew/Cellar/ngspice/*/share/ngspice/scripts",
+];
+
 /// Detect LTspice installation
 pub fn detect_ltspice() -> Option<String> {
     #[cfg(windows)]
@@ -224,6 +242,103 @@ pub fn detect_ltspice_lib_dir() -> Option<PathBuf> {
     }
 
     log::warn!("Could not find LTspice library directory");
+    None
+}
+
+/// Detect ngspice library/scripts directory
+pub fn detect_ngspice_lib_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        for path in NGSPICE_LIB_PATHS_WINDOWS {
+            let p = PathBuf::from(path);
+            if p.exists() && p.is_dir() {
+                log::info!("Found ngspice library directory: {:?}", p);
+                return Some(p);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in NGSPICE_LIB_PATHS_MACOS {
+            // Expand ~ to home directory
+            let expanded = if path.starts_with("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    home.join(&path[2..])
+                } else {
+                    PathBuf::from(path)
+                }
+            } else if path.contains('*') {
+                // Handle glob patterns for Cellar paths
+                if let Some(found) = expand_glob_path(path) {
+                    found
+                } else {
+                    continue;
+                }
+            } else {
+                PathBuf::from(path)
+            };
+
+            if expanded.exists() && expanded.is_dir() {
+                log::info!("Found ngspice library directory: {:?}", expanded);
+                return Some(expanded);
+            }
+        }
+    }
+
+    // Try to find lib directory relative to ngspice executable
+    if let Some(ngspice_path) = detect_ngspice() {
+        let exe_path = PathBuf::from(&ngspice_path);
+
+        // On Unix: /opt/homebrew/bin/ngspice -> /opt/homebrew/share/ngspice/scripts
+        if let Some(bin_dir) = exe_path.parent() {
+            if let Some(prefix) = bin_dir.parent() {
+                let lib_dir = prefix.join("share").join("ngspice").join("scripts");
+                if lib_dir.exists() {
+                    log::info!("Found ngspice library directory relative to exe: {:?}", lib_dir);
+                    return Some(lib_dir);
+                }
+            }
+        }
+    }
+
+    log::warn!("Could not find ngspice library directory");
+    None
+}
+
+/// Expand a glob pattern path (simple implementation for Homebrew Cellar paths)
+#[cfg(target_os = "macos")]
+fn expand_glob_path(pattern: &str) -> Option<PathBuf> {
+    use std::fs;
+
+    // Split at the wildcard
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let prefix = PathBuf::from(parts[0].trim_end_matches('/'));
+    let suffix = parts[1].trim_start_matches('/');
+
+    // List directories in prefix and find the latest version
+    if let Ok(entries) = fs::read_dir(&prefix) {
+        let mut versions: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.path())
+            .collect();
+
+        // Sort to get latest version
+        versions.sort();
+
+        if let Some(latest) = versions.last() {
+            let full_path = latest.join(suffix);
+            if full_path.exists() {
+                return Some(full_path);
+            }
+        }
+    }
+
     None
 }
 
@@ -389,6 +504,11 @@ fn find_library_file_recursive(dir: &PathBuf, file_name: &str, depth: usize, max
 
 /// List available libraries from LTspice's library directory
 pub fn list_available_libraries() -> Vec<String> {
+    list_ltspice_libraries()
+}
+
+/// List available libraries from LTspice's library directory
+pub fn list_ltspice_libraries() -> Vec<String> {
     let mut libraries = Vec::new();
 
     if let Some(lib_dir) = detect_ltspice_lib_dir() {
@@ -399,6 +519,54 @@ pub fn list_available_libraries() -> Vec<String> {
     libraries.sort();
     libraries.dedup();
     libraries
+}
+
+/// List available libraries/scripts from ngspice's directory
+pub fn list_ngspice_libraries() -> Vec<String> {
+    let mut libraries = Vec::new();
+
+    if let Some(lib_dir) = detect_ngspice_lib_dir() {
+        collect_ngspice_files(&lib_dir, &mut libraries, 0, 3);
+    }
+
+    // Sort and deduplicate
+    libraries.sort();
+    libraries.dedup();
+    libraries
+}
+
+/// Recursively collect ngspice script files from a directory
+fn collect_ngspice_files(dir: &PathBuf, libraries: &mut Vec<String>, depth: usize, max_depth: usize) {
+    if depth > max_depth {
+        return;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_ngspice_files(&path, libraries, depth + 1, max_depth);
+            } else if let Some(ext) = path.extension() {
+                let ext_str = ext.to_string_lossy().to_lowercase();
+                // ngspice uses various script/include file extensions
+                if ext_str == "lib" || ext_str == "mod" || ext_str == "inc"
+                   || ext_str == "cir" || ext_str == "spi" || ext_str == "sp" {
+                    if let Some(file_name) = path.file_name() {
+                        libraries.push(file_name.to_string_lossy().to_string());
+                    }
+                }
+            } else {
+                // Also check files without extensions (ngspice scripts often have no extension)
+                if let Some(file_name) = path.file_name() {
+                    let name = file_name.to_string_lossy();
+                    // Include common script file patterns
+                    if name.starts_with("spinit") || name.ends_with("rc") {
+                        libraries.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Recursively collect library files from a directory
@@ -602,11 +770,21 @@ fn prepare_ngspice_netlist(netlist: &str, raw_path: &PathBuf) -> String {
 
     if !has_control {
         // Add .control section before .end to write raw file
+        // ngspice on Unix doesn't like quoted paths - use the path directly
+        // For paths with spaces, we use single quotes (ngspice handles these better)
         let raw_path_str = raw_path.to_string_lossy().replace('\\', "/");
+
+        // Use single quotes only if the path contains spaces, otherwise no quotes
+        let write_cmd = if raw_path_str.contains(' ') {
+            format!("write '{}' all", raw_path_str)
+        } else {
+            format!("write {} all", raw_path_str)
+        };
+
         let control_section = vec![
             ".control".to_string(),
             "run".to_string(),
-            format!("write \"{}\" all", raw_path_str),
+            write_cmd,
             "quit".to_string(),
             ".endc".to_string(),
         ];
@@ -625,87 +803,142 @@ fn prepare_ngspice_netlist(netlist: &str, raw_path: &PathBuf) -> String {
     lines.join("\n")
 }
 
-/// Parse ngspice ASCII raw file format
+/// Parse ngspice raw file format (supports both ASCII and binary)
 fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn std::error::Error + Send + Sync>> {
-    let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
+    // Read the entire file as bytes first
+    let data = std::fs::read(path)?;
 
+    // Find where the header ends and data begins
+    // Header is ASCII, so we can safely convert it
     let mut num_vars = 0;
     let mut num_points = 0;
     let mut variables: Vec<(String, String)> = Vec::new();
-    let mut in_variables = false;
-    let mut in_values = false;
-    let mut all_data: Vec<Vec<f64>> = Vec::new();
-    let mut current_point_data: Vec<f64> = Vec::new();
     let mut analysis_type = "transient".to_string();
+    let mut is_binary = false;
+    let mut data_start_offset = 0;
 
-    for line in reader.lines() {
-        let line = line?;
-        let line = line.trim();
+    // Parse header line by line until we hit Values: or Binary:
+    let mut in_variables = false;
+    let mut line_start = 0;
 
-        if line.starts_with("Plotname:") {
-            let plotname = line.split(':').nth(1).map(|s| s.trim().to_lowercase()).unwrap_or_default();
-            if plotname.contains("ac") {
-                analysis_type = "ac".to_string();
-            } else if plotname.contains("dc") {
-                analysis_type = "dc".to_string();
-            } else {
-                analysis_type = "transient".to_string();
-            }
-        } else if line.starts_with("No. Variables:") {
-            if let Some(n) = line.split(':').nth(1) {
-                num_vars = n.trim().parse().unwrap_or(0);
-                all_data = vec![Vec::new(); num_vars];
-            }
-        } else if line.starts_with("No. Points:") {
-            if let Some(n) = line.split(':').nth(1) {
-                num_points = n.trim().parse().unwrap_or(0);
-            }
-        } else if line == "Variables:" {
-            in_variables = true;
-            in_values = false;
-        } else if line == "Values:" || line == "Binary:" {
-            in_variables = false;
-            in_values = true;
-        } else if in_variables && !line.is_empty() {
-            // Parse variable line: "0\ttime\ttime" or "0 time time"
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let name = parts[1].to_string();
-                let var_type = parts[2].to_string();
-                variables.push((name, var_type));
-            }
-        } else if in_values && !line.is_empty() {
-            // Parse value lines
-            // Format can be:
-            // "0  1.000000e+00" (point index followed by first value)
-            // "  2.000000e+00" (subsequent values for same point)
+    for (i, &byte) in data.iter().enumerate() {
+        if byte == b'\n' {
+            // Extract the line (handle potential \r\n)
+            let line_end = if i > 0 && data[i - 1] == b'\r' { i - 1 } else { i };
+            let line_bytes = &data[line_start..line_end];
 
-            let parts: Vec<&str> = line.split_whitespace().collect();
+            // Try to parse as UTF-8, skip if invalid
+            if let Ok(line) = std::str::from_utf8(line_bytes) {
+                let line = line.trim();
 
-            for part in parts {
-                // Try to parse as a number
-                if let Ok(value) = part.parse::<f64>() {
-                    current_point_data.push(value);
-
-                    // If we have all values for a point, store them
-                    if current_point_data.len() == num_vars {
-                        for (i, &val) in current_point_data.iter().enumerate() {
-                            if i < all_data.len() {
-                                all_data[i].push(val);
-                            }
-                        }
-                        current_point_data.clear();
+                if line.starts_with("Plotname:") {
+                    let plotname = line.split(':').nth(1).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+                    if plotname.contains("ac") {
+                        analysis_type = "ac".to_string();
+                    } else if plotname.contains("dc") {
+                        analysis_type = "dc".to_string();
+                    } else {
+                        analysis_type = "transient".to_string();
+                    }
+                } else if line.starts_with("No. Variables:") {
+                    if let Some(n) = line.split(':').nth(1) {
+                        num_vars = n.trim().parse().unwrap_or(0);
+                    }
+                } else if line.starts_with("No. Points:") {
+                    if let Some(n) = line.split(':').nth(1) {
+                        num_points = n.trim().parse().unwrap_or(0);
+                    }
+                } else if line == "Variables:" {
+                    in_variables = true;
+                } else if line == "Values:" {
+                    is_binary = false;
+                    data_start_offset = i + 1;
+                    break;
+                } else if line == "Binary:" {
+                    is_binary = true;
+                    data_start_offset = i + 1;
+                    break;
+                } else if in_variables && !line.is_empty() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 3 {
+                        let name = parts[1].to_string();
+                        let var_type = parts[2].to_string();
+                        variables.push((name, var_type));
                     }
                 }
             }
+
+            line_start = i + 1;
+        }
+    }
+
+    log::info!("ngspice raw file: num_vars={}, num_points={}, is_binary={}, data_offset={}",
+               num_vars, num_points, is_binary, data_start_offset);
+
+    if num_vars == 0 || variables.is_empty() {
+        return Err("Could not parse ngspice raw file header".into());
+    }
+
+    let mut all_data: Vec<Vec<f64>> = vec![Vec::with_capacity(num_points); num_vars];
+
+    if is_binary {
+        // Parse binary data - ngspice uses float64 for all values
+        let binary_data = &data[data_start_offset..];
+        let bytes_per_point = num_vars * 8; // All float64
+
+        log::info!("Parsing binary data: {} bytes, expecting {} points x {} vars x 8 bytes = {} bytes",
+                   binary_data.len(), num_points, num_vars, num_points * bytes_per_point);
+
+        for point in 0..num_points {
+            let point_offset = point * bytes_per_point;
+            if point_offset + bytes_per_point > binary_data.len() {
+                log::warn!("Binary data truncated at point {}", point);
+                break;
+            }
+
+            for var in 0..num_vars {
+                let offset = point_offset + var * 8;
+                if let Ok(value) = read_f64_le(binary_data, offset) {
+                    all_data[var].push(value);
+                }
+            }
+        }
+    } else {
+        // Parse ASCII values
+        let values_data = &data[data_start_offset..];
+        if let Ok(values_str) = std::str::from_utf8(values_data) {
+            let mut current_point_data: Vec<f64> = Vec::new();
+
+            for line in values_str.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+
+                for part in line.split_whitespace() {
+                    if let Ok(value) = part.parse::<f64>() {
+                        current_point_data.push(value);
+
+                        if current_point_data.len() == num_vars {
+                            for (i, &val) in current_point_data.iter().enumerate() {
+                                if i < all_data.len() {
+                                    all_data[i].push(val);
+                                }
+                            }
+                            current_point_data.clear();
+                        }
+                    }
+                }
+            }
+        } else {
+            return Err("Could not parse ngspice ASCII values as UTF-8".into());
         }
     }
 
     log::info!("Parsed ngspice raw: num_vars={}, num_points={}, actual_points={}",
                num_vars, num_points, all_data.get(0).map(|v| v.len()).unwrap_or(0));
 
-    if variables.is_empty() || all_data.is_empty() || all_data[0].is_empty() {
+    if all_data.is_empty() || all_data[0].is_empty() {
         return Err("Could not parse ngspice raw file - no data found".into());
     }
 
