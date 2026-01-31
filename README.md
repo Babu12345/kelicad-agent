@@ -1,17 +1,26 @@
 # KeliCAD Agent
 
-Local simulation agent for KeliCAD - runs LTspice simulations on your computer.
+Local simulation agent for KeliCAD - runs SPICE simulations on your computer using LTspice or ngspice.
 
 ## Why Use This Agent?
 
-LTspice cannot be used commercially on servers due to its EULA restrictions. This agent allows you to run LTspice simulations locally on your own computer while using the KeliCAD web application, ensuring full compliance with LTspice's license terms.
+- **LTspice**: Cannot be used commercially on servers due to its EULA restrictions. This agent allows you to run LTspice simulations locally while using the KeliCAD web application.
+- **ngspice**: While KeliCAD can run ngspice in the cloud, local simulation gives you access to your own model libraries and faster iteration.
 
 ## Features
 
 - Runs as a background application (system tray)
-- Auto-detects LTspice installation
+- Auto-detects LTspice and ngspice installations
 - WebSocket server for communication with KeliCAD web app
 - Secure: only accepts connections from localhost and verified origins
+- Supports both ASCII and binary raw file formats
+
+## Supported Simulators
+
+| Simulator | Windows | macOS | Notes |
+|-----------|---------|-------|-------|
+| LTspice | ✅ | ✅ | Bundled with manufacturer models |
+| ngspice | ✅ | ✅ | User-provided models |
 
 ## Installation
 
@@ -23,12 +32,24 @@ Download the latest release for your platform:
 - **macOS (Intel)**: `kelicad-agent_x.x.x_x64.dmg`
 - **macOS (Apple Silicon)**: `kelicad-agent_x.x.x_aarch64.dmg`
 
+### Installing ngspice
+
+ngspice must be installed separately:
+
+**macOS (Homebrew):**
+```bash
+brew install ngspice
+```
+
+**Windows:**
+Download from [ngspice.sourceforge.io](https://ngspice.sourceforge.io/download.html)
+
 ### Building from Source
 
 Requirements:
 - Rust 1.70+
 - Node.js 18+
-- LTspice installed on your system
+- LTspice and/or ngspice installed on your system
 
 ```bash
 # Install dependencies
@@ -47,16 +68,32 @@ npm run build
 2. The agent will run in your system tray
 3. Open the KeliCAD web application
 4. Click "Connect Agent" in the circuit editor
-5. Select LTspice as your simulator
+5. Select your simulator (LTspice or ngspice)
 6. Run your simulations!
 
 ## How It Works
 
 1. The agent starts a WebSocket server on `localhost:9347`
 2. When you click "Connect Agent" in KeliCAD, your browser connects to this local server
-3. When you run a simulation with LTspice selected, the netlist is sent to the agent
-4. The agent runs LTspice, parses the results, and sends them back
+3. When you run a simulation, the netlist is sent to the agent
+4. The agent runs the selected simulator, parses the results, and sends them back
 5. Results are displayed in the KeliCAD waveform viewer
+
+## ngspice Model Libraries
+
+Unlike LTspice, ngspice doesn't bundle manufacturer models. You need to download SPICE models from component manufacturers and place them in one of these directories:
+
+**macOS:**
+- `~/ngspice/lib`
+- `~/ngspice/models`
+- `~/.ngspice/lib`
+- `~/Documents/ngspice/lib`
+
+**Windows:**
+- `C:\ngspice\lib`
+- `C:\ngspice\models`
+
+The agent will automatically scan these directories and make the libraries available in KeliCAD's library browser.
 
 ## Security
 
@@ -66,13 +103,13 @@ npm run build
 
 ## Supported Platforms
 
-| Platform | Architecture | Status |
-|----------|--------------|--------|
-| Windows | x64 | ✅ Supported |
-| Windows | ARM64 | ✅ Supported |
-| macOS | x64 (Intel) | ✅ Supported |
-| macOS | ARM64 (Apple Silicon) | ✅ Supported |
-| Linux | - | ❌ LTspice not available |
+| Platform | Architecture | LTspice | ngspice |
+|----------|--------------|---------|---------|
+| Windows | x64 | ✅ | ✅ |
+| Windows | ARM64 | ✅ | ✅ |
+| macOS | x64 (Intel) | ✅ | ✅ |
+| macOS | ARM64 (Apple Silicon) | ✅ | ✅ |
+| Linux | - | ❌ | ✅ (coming soon) |
 
 ## Troubleshooting
 
@@ -88,7 +125,19 @@ The agent looks for LTspice in these locations:
 **macOS:**
 - `/Applications/LTspice.app/Contents/MacOS/LTspice`
 
-If LTspice is installed in a different location, you'll need to add it to your system PATH.
+### ngspice Not Detected
+
+The agent looks for ngspice in these locations:
+
+**Windows:**
+- `C:\Program Files\ngspice\bin\ngspice.exe`
+- `C:\Spice64\bin\ngspice.exe`
+
+**macOS:**
+- `/opt/homebrew/bin/ngspice` (Apple Silicon)
+- `/usr/local/bin/ngspice` (Intel)
+
+If installed via Homebrew, ngspice should be detected automatically.
 
 ### Connection Failed
 
@@ -107,5 +156,4 @@ this software for commercial purposes.
 
 See the [LICENSE](LICENSE) file for full terms.
 
-**Note**: This agent uses LTspice, which is subject to its own [EULA](https://www.analog.com/en/design-center/design-tools-and-calculators/ltspice-simulator.html).
-Using this agent ensures compliance with LTspice's licensing terms by running simulations locally on your own computer.
+**Note**: LTspice is subject to its own [EULA](https://www.analog.com/en/design-center/design-tools-and-calculators/ltspice-simulator.html). Using this agent ensures compliance with LTspice's licensing terms by running simulations locally on your own computer. ngspice is open-source software licensed under a BSD-style license.
