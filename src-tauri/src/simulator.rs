@@ -632,8 +632,10 @@ fn collect_ngspice_files(dir: &PathBuf, libraries: &mut Vec<String>, depth: usiz
             } else if let Some(ext) = path.extension() {
                 let ext_str = ext.to_string_lossy().to_lowercase();
                 // ngspice uses various script/include file extensions
+                // .lib = library, .mod = model, .inc = include, .sub = subcircuit
+                // .cir/.spi/.sp = circuit/spice files
                 if ext_str == "lib" || ext_str == "mod" || ext_str == "inc"
-                   || ext_str == "cir" || ext_str == "spi" || ext_str == "sp" {
+                   || ext_str == "sub" || ext_str == "cir" || ext_str == "spi" || ext_str == "sp" {
                     if let Some(file_name) = path.file_name() {
                         libraries.push(file_name.to_string_lossy().to_string());
                     }
