@@ -7,8 +7,13 @@
 # This script will:
 # 1. Load credentials from ../.env.local automatically
 # 2. Build the Tauri app (which signs and notarizes the .app)
-# 3. Verify the DMG signature
-# 4. Copy to public/downloads
+# 3. Notarize the DMG separately (Tauri only notarizes .app, not DMG)
+# 4. Staple the notarization ticket to the DMG
+# 5. Verify the DMG signature and notarization
+# 6. Copy to public/downloads
+#
+# Note: Tauri notarizes the .app bundle but NOT the DMG. For full Gatekeeper
+# approval, the DMG must be notarized separately. This script handles that.
 #
 # Prerequisites:
 # 1. Developer ID Application certificate installed in Keychain
@@ -103,8 +108,8 @@ echo -e "  ${GREEN}✓${NC} APPLE_TEAM_ID: $APPLE_TEAM_ID"
 echo -e "  ${GREEN}✓${NC} APPLE_ID: $APPLE_ID"
 echo -e "  ${GREEN}✓${NC} APPLE_PASSWORD: [set]"
 
-# Step 1: Build with Tauri (handles signing and notarization)
-echo -e "\n${GREEN}Step 1/3: Building Tauri app (includes signing & notarization)...${NC}"
+# Step 1: Build with Tauri (handles signing and .app notarization)
+echo -e "\n${GREEN}Step 1/5: Building Tauri app (includes signing & .app notarization)...${NC}"
 echo -e "${YELLOW}This may take a few minutes...${NC}"
 
 APP_PATH="src-tauri/target/release/bundle/macos/KeliCAD Agent.app"
@@ -181,8 +186,65 @@ fi
 
 echo -e "${GREEN}✓ App built, signed, and notarized${NC}"
 
-# Step 2: Verify the DMG
-echo -e "\n${GREEN}Step 2/3: Verifying DMG signature...${NC}"
+# Step 2: Notarize the DMG
+# Note: Tauri only notarizes the .app, not the DMG itself.
+# For full Gatekeeper approval, we need to notarize the DMG separately.
+echo -e "\n${GREEN}Step 2/5: Notarizing DMG...${NC}"
+
+# Check if DMG is already notarized
+if spctl -a -t open --context context:primary-signature "$DMG_PATH" 2>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} DMG already notarized"
+else
+    echo -e "${BLUE}Submitting DMG for notarization...${NC}"
+
+    # Submit for notarization and wait
+    NOTARIZE_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
+        --apple-id "$APPLE_ID" \
+        --password "$APPLE_PASSWORD" \
+        --team-id "$APPLE_TEAM_ID" \
+        --wait 2>&1)
+
+    NOTARIZE_STATUS=$?
+    echo "$NOTARIZE_OUTPUT"
+
+    if [ $NOTARIZE_STATUS -ne 0 ]; then
+        echo -e "${RED}Notarization failed${NC}"
+        exit 1
+    fi
+
+    if echo "$NOTARIZE_OUTPUT" | grep -q "status: Accepted"; then
+        echo -e "  ${GREEN}✓${NC} DMG notarized successfully"
+    else
+        echo -e "${RED}Notarization was not accepted${NC}"
+        exit 1
+    fi
+fi
+
+# Step 3: Staple the notarization ticket
+echo -e "\n${GREEN}Step 3/5: Stapling notarization ticket...${NC}"
+
+# Wait a moment for Apple's servers to propagate the ticket
+sleep 5
+
+STAPLE_ATTEMPTS=0
+MAX_STAPLE_ATTEMPTS=6
+while [ $STAPLE_ATTEMPTS -lt $MAX_STAPLE_ATTEMPTS ]; do
+    if xcrun stapler staple "$DMG_PATH" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Notarization ticket stapled"
+        break
+    else
+        STAPLE_ATTEMPTS=$((STAPLE_ATTEMPTS + 1))
+        if [ $STAPLE_ATTEMPTS -lt $MAX_STAPLE_ATTEMPTS ]; then
+            echo -e "  ${YELLOW}...${NC} Waiting for ticket propagation (attempt $STAPLE_ATTEMPTS/$MAX_STAPLE_ATTEMPTS)"
+            sleep 10
+        else
+            echo -e "  ${YELLOW}⚠${NC} Could not staple ticket (will still work with online verification)"
+        fi
+    fi
+done
+
+# Step 4: Verify the DMG
+echo -e "\n${GREEN}Step 4/5: Verifying DMG signature and notarization...${NC}"
 
 # Check code signature
 if codesign -v "$DMG_PATH" 2>/dev/null; then
@@ -194,14 +256,13 @@ fi
 
 # Check notarization (Gatekeeper)
 if spctl -a -t open --context context:primary-signature "$DMG_PATH" 2>/dev/null; then
-    echo -e "  ${GREEN}✓${NC} Notarization verified (Gatekeeper approved)"
+    echo -e "  ${GREEN}✓${NC} Gatekeeper approved (notarization verified)"
 else
-    echo -e "  ${YELLOW}⚠${NC} Gatekeeper check failed - DMG may not be notarized"
-    echo "    Users may see a warning when opening the DMG"
+    echo -e "  ${YELLOW}⚠${NC} Gatekeeper check failed - DMG may require online verification"
 fi
 
-# Step 3: Copy to public downloads
-echo -e "\n${GREEN}Step 3/3: Copying to public downloads...${NC}"
+# Step 5: Copy to public downloads
+echo -e "\n${GREEN}Step 5/5: Copying to public downloads...${NC}"
 DOWNLOADS_DIR="../public/downloads"
 mkdir -p "$DOWNLOADS_DIR"
 cp "$DMG_PATH" "$DOWNLOADS_DIR/"
