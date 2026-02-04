@@ -72,13 +72,17 @@ pub struct SimulationRequest {
     #[serde(rename = "type")]
     pub msg_type: String,
     pub netlist: String,
-    #[serde(rename = "waveformQuality")]
+    #[serde(rename = "waveformQuality", default = "default_waveform_quality")]
     pub waveform_quality: String,
     /// Which simulator to use: "ltspice" or "ngspice"
     #[serde(default = "default_simulator")]
     pub simulator: String,
     pub timeout: Option<u64>,
     pub timestamp: u64,
+}
+
+fn default_waveform_quality() -> String {
+    "smooth".to_string()
 }
 
 fn default_simulator() -> String {
@@ -360,6 +364,19 @@ mod tests {
 
         let request: SimulationRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.timeout, None);
+    }
+
+    #[test]
+    fn test_simulation_request_without_waveform_quality() {
+        let json = r#"{
+            "id": "sim-789",
+            "type": "simulate",
+            "netlist": "* Test",
+            "timestamp": 1704067200000
+        }"#;
+
+        let request: SimulationRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.waveform_quality, "smooth"); // default value
     }
 
     #[test]

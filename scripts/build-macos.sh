@@ -107,16 +107,68 @@ echo -e "  ${GREEN}✓${NC} APPLE_PASSWORD: [set]"
 echo -e "\n${GREEN}Step 1/3: Building Tauri app (includes signing & notarization)...${NC}"
 echo -e "${YELLOW}This may take a few minutes...${NC}"
 
+APP_PATH="src-tauri/target/release/bundle/macos/KeliCAD Agent.app"
+DMG_PATH="src-tauri/target/release/bundle/dmg/KeliCAD Agent_1.0.0_aarch64.dmg"
+
+# Run Tauri build in background so we can monitor for completion
 APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
 APPLE_ID="$APPLE_ID" \
 APPLE_PASSWORD="$APPLE_PASSWORD" \
 APPLE_TEAM_ID="$APPLE_TEAM_ID" \
-npx @tauri-apps/cli build
+npx @tauri-apps/cli build &
+BUILD_PID=$!
 
-# Check if build succeeded
-APP_PATH="src-tauri/target/release/bundle/macos/KeliCAD Agent.app"
-DMG_PATH="src-tauri/target/release/bundle/dmg/KeliCAD Agent_1.0.0_aarch64.dmg"
+# Monitor for DMG creation and notarization completion
+# Sometimes notarization completes but the process hangs waiting for confirmation
+echo -e "${BLUE}Monitoring build progress...${NC}"
+MAX_WAIT=600  # 10 minutes max
+POLL_INTERVAL=5
+WAITED=0
+DMG_FOUND=false
+NOTARIZED=false
 
+while [ $WAITED -lt $MAX_WAIT ]; do
+    # Check if build process finished
+    if ! kill -0 $BUILD_PID 2>/dev/null; then
+        # Process finished, check exit code
+        wait $BUILD_PID
+        BUILD_EXIT=$?
+        if [ $BUILD_EXIT -eq 0 ]; then
+            echo -e "${GREEN}✓ Tauri build process completed${NC}"
+        fi
+        break
+    fi
+
+    # Check if DMG exists and is notarized (notarization can complete before process exits)
+    if [ -f "$DMG_PATH" ] && [ "$DMG_FOUND" = false ]; then
+        echo -e "  ${GREEN}✓${NC} DMG created"
+        DMG_FOUND=true
+    fi
+
+    if [ "$DMG_FOUND" = true ] && [ "$NOTARIZED" = false ]; then
+        # Check if notarization is complete (Gatekeeper check)
+        if spctl -a -t open --context context:primary-signature "$DMG_PATH" 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Notarization complete (Gatekeeper approved)"
+            NOTARIZED=true
+
+            # Kill the hanging process since notarization is done
+            echo -e "${BLUE}Notarization verified, stopping build monitor...${NC}"
+            kill $BUILD_PID 2>/dev/null || true
+            wait $BUILD_PID 2>/dev/null || true
+            break
+        fi
+    fi
+
+    sleep $POLL_INTERVAL
+    WAITED=$((WAITED + POLL_INTERVAL))
+
+    # Show progress every 30 seconds
+    if [ $((WAITED % 30)) -eq 0 ]; then
+        echo -e "  ${YELLOW}...${NC} Still waiting (${WAITED}s elapsed)"
+    fi
+done
+
+# Final checks
 if [ ! -d "$APP_PATH" ]; then
     echo -e "${RED}Build failed - app bundle not found${NC}"
     exit 1
@@ -127,7 +179,7 @@ if [ ! -f "$DMG_PATH" ]; then
     exit 1
 fi
 
-echo -e "${GREEN}✓ App built, signed, and notarized by Tauri${NC}"
+echo -e "${GREEN}✓ App built, signed, and notarized${NC}"
 
 # Step 2: Verify the DMG
 echo -e "\n${GREEN}Step 2/3: Verifying DMG signature...${NC}"
