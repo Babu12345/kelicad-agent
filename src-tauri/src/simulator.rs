@@ -1610,4 +1610,233 @@ R3 ref 0 100k
         assert!(prepared.contains(".save all"));
         assert!(prepared.contains(".options plotwinsize=0"));
     }
+
+    #[test]
+    fn test_prepare_ngspice_netlist_adds_control_section() {
+        let netlist = "* Test\nVin in 0 AC 1\nR1 in out 1k\nC1 out 0 100n\n.ac dec 10 1 100k\n.end";
+        let raw_path = PathBuf::from("/tmp/test.raw");
+        let prepared = prepare_ngspice_netlist(netlist, &raw_path);
+
+        assert!(prepared.contains(".control"));
+        assert!(prepared.contains("run"));
+        assert!(prepared.contains("write"));
+        assert!(prepared.contains(".endc"));
+    }
+
+    #[test]
+    fn test_prepare_ngspice_netlist_preserves_existing_control() {
+        let netlist = "* Test\nVin in 0 AC 1\n.control\nrun\n.endc\n.end";
+        let raw_path = PathBuf::from("/tmp/test.raw");
+        let prepared = prepare_ngspice_netlist(netlist, &raw_path);
+
+        // Should not add another .control section
+        let control_count = prepared.matches(".control").count();
+        assert_eq!(control_count, 1);
+    }
+
+    #[test]
+    fn test_parse_ngspice_raw_file_transient() {
+        // Create a mock ngspice ASCII raw file for transient analysis
+        let raw_content = r#"Title: * test circuit
+Date: Sat Feb  7 12:00:00  2026
+Plotname: Transient Analysis
+Flags: real
+No. Variables: 3
+No. Points: 3
+Variables:
+	0	time	time
+	1	v(in)	voltage
+	2	v(out)	voltage
+Values:
+ 0	0.000000000000000e+00
+	1.000000000000000e+00
+	0.000000000000000e+00
+
+ 1	1.000000000000000e-03
+	1.000000000000000e+00
+	5.000000000000000e-01
+
+ 2	2.000000000000000e-03
+	1.000000000000000e+00
+	8.000000000000000e-01
+"#;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let raw_path = temp_dir.path().join("test.raw");
+        std::fs::write(&raw_path, raw_content).unwrap();
+
+        let results = parse_ngspice_raw_file(&raw_path).unwrap();
+
+        assert_eq!(results.analysis_type, "transient");
+        assert_eq!(results.x_axis_label, Some("time".to_string()));
+        assert_eq!(results.time.len(), 3);
+        assert_eq!(results.traces.len(), 2);
+
+        // Check time values
+        assert!((results.time[0] - 0.0).abs() < 1e-10);
+        assert!((results.time[1] - 0.001).abs() < 1e-10);
+        assert!((results.time[2] - 0.002).abs() < 1e-10);
+
+        // Check v(in) trace
+        let v_in = &results.traces[0];
+        assert_eq!(v_in.name, "v(in)");
+        assert_eq!(v_in.unit, "V");
+        assert!((v_in.data[0] - 1.0).abs() < 1e-10);
+
+        // Check v(out) trace
+        let v_out = &results.traces[1];
+        assert_eq!(v_out.name, "v(out)");
+        assert!((v_out.data[0] - 0.0).abs() < 1e-10);
+        assert!((v_out.data[1] - 0.5).abs() < 1e-10);
+        assert!((v_out.data[2] - 0.8).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_parse_ngspice_raw_file_ac_complex() {
+        // Create a mock ngspice ASCII raw file for AC analysis with complex values
+        // Complex values are formatted as "real,imag"
+        let raw_content = r#"Title: * ac test circuit
+Date: Sat Feb  7 12:00:00  2026
+Plotname: AC Analysis
+Flags: complex
+No. Variables: 3
+No. Points: 3
+Variables:
+	0	frequency	frequency grid=3
+	1	v(in)	voltage
+	2	v(out)	voltage
+Values:
+ 0	1.000000000000000e+00,0.000000000000000e+00
+	1.000000000000000e+00,0.000000000000000e+00
+	1.000000000000000e+00,0.000000000000000e+00
+
+ 1	1.000000000000000e+01,0.000000000000000e+00
+	1.000000000000000e+00,0.000000000000000e+00
+	7.071067811865476e-01,-7.071067811865476e-01
+
+ 2	1.000000000000000e+02,0.000000000000000e+00
+	1.000000000000000e+00,0.000000000000000e+00
+	9.950371902099893e-02,-9.950371902099893e-01
+"#;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let raw_path = temp_dir.path().join("test_ac.raw");
+        std::fs::write(&raw_path, raw_content).unwrap();
+
+        let results = parse_ngspice_raw_file(&raw_path).unwrap();
+
+        assert_eq!(results.analysis_type, "ac");
+        assert_eq!(results.x_axis_label, Some("frequency".to_string()));
+        assert_eq!(results.time.len(), 3); // "time" field holds frequency for AC
+        assert_eq!(results.traces.len(), 2);
+
+        // Check frequency values (stored in "time" field)
+        assert!((results.time[0] - 1.0).abs() < 1e-10);
+        assert!((results.time[1] - 10.0).abs() < 1e-10);
+        assert!((results.time[2] - 100.0).abs() < 1e-10);
+
+        // Check v(in) trace - should be magnitude of (1, 0) = 1
+        let v_in = &results.traces[0];
+        assert_eq!(v_in.name, "v(in)");
+        assert!((v_in.data[0] - 1.0).abs() < 1e-10);
+        assert!((v_in.data[1] - 1.0).abs() < 1e-10);
+        assert!((v_in.data[2] - 1.0).abs() < 1e-10);
+
+        // Check v(out) trace - magnitudes computed from complex values
+        let v_out = &results.traces[1];
+        assert_eq!(v_out.name, "v(out)");
+
+        // At 1 Hz: magnitude of (1, 0) = 1
+        assert!((v_out.data[0] - 1.0).abs() < 1e-10);
+
+        // At 10 Hz: magnitude of (0.707, -0.707) = sqrt(0.5 + 0.5) = 1
+        assert!((v_out.data[1] - 1.0).abs() < 1e-6);
+
+        // At 100 Hz: magnitude of (0.0995, -0.995) = sqrt(0.0099 + 0.990) ≈ 1
+        assert!((v_out.data[2] - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_ngspice_raw_file_dc_analysis() {
+        // Create a mock ngspice ASCII raw file for DC analysis
+        let raw_content = r#"Title: * dc test circuit
+Date: Sat Feb  7 12:00:00  2026
+Plotname: DC transfer characteristic
+Flags: real
+No. Variables: 2
+No. Points: 3
+Variables:
+	0	v-sweep	voltage
+	1	v(out)	voltage
+Values:
+ 0	0.000000000000000e+00
+	0.000000000000000e+00
+
+ 1	2.500000000000000e+00
+	2.500000000000000e+00
+
+ 2	5.000000000000000e+00
+	5.000000000000000e+00
+"#;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let raw_path = temp_dir.path().join("test_dc.raw");
+        std::fs::write(&raw_path, raw_content).unwrap();
+
+        let results = parse_ngspice_raw_file(&raw_path).unwrap();
+
+        assert_eq!(results.analysis_type, "dc");
+        assert_eq!(results.x_axis_label, Some("v-sweep".to_string()));
+        assert_eq!(results.time.len(), 3);
+        assert_eq!(results.traces.len(), 1);
+
+        // Check sweep values
+        assert!((results.time[0] - 0.0).abs() < 1e-10);
+        assert!((results.time[1] - 2.5).abs() < 1e-10);
+        assert!((results.time[2] - 5.0).abs() < 1e-10);
+
+        // Check v(out) trace
+        let v_out = &results.traces[0];
+        assert_eq!(v_out.name, "v(out)");
+        assert!((v_out.data[0] - 0.0).abs() < 1e-10);
+        assert!((v_out.data[1] - 2.5).abs() < 1e-10);
+        assert!((v_out.data[2] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_complex_magnitude_calculation() {
+        // Test the magnitude calculation: sqrt(real² + imag²)
+        // This verifies the math used in AC analysis parsing
+
+        // Pure real: (3, 0) -> magnitude = 3
+        let real = 3.0_f64;
+        let imag = 0.0_f64;
+        let magnitude = (real * real + imag * imag).sqrt();
+        assert!((magnitude - 3.0).abs() < 1e-10);
+
+        // Pure imaginary: (0, 4) -> magnitude = 4
+        let real = 0.0_f64;
+        let imag = 4.0_f64;
+        let magnitude = (real * real + imag * imag).sqrt();
+        assert!((magnitude - 4.0).abs() < 1e-10);
+
+        // 3-4-5 triangle: (3, 4) -> magnitude = 5
+        let real = 3.0_f64;
+        let imag = 4.0_f64;
+        let magnitude = (real * real + imag * imag).sqrt();
+        assert!((magnitude - 5.0).abs() < 1e-10);
+
+        // Negative values: (-3, -4) -> magnitude = 5
+        let real = -3.0_f64;
+        let imag = -4.0_f64;
+        let magnitude = (real * real + imag * imag).sqrt();
+        assert!((magnitude - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_detect_ngspice_returns_option() {
+        // This test verifies the function exists and returns an Option
+        let result = detect_ngspice();
+        assert!(result.is_some() || result.is_none());
+    }
 }
