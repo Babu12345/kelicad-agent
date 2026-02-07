@@ -111,8 +111,12 @@ echo -e "  ${GREEN}✓${NC} APPLE_PASSWORD: [set]"
 # Step 1: Clean and build with Tauri (handles signing and .app notarization)
 echo -e "\n${GREEN}Step 1/5: Building Tauri app (includes signing & .app notarization)...${NC}"
 
+# Install npm dependencies
+echo -e "${BLUE}Installing npm dependencies...${NC}"
+npm install --silent 2>/dev/null || npm install
+
 # Clean previous build to ensure fresh compilation
-echo -e "${BLUE}Cleaning previous build...${NC}"
+echo -e "${BLUE}Cleaning previous Rust build...${NC}"
 (cd src-tauri && cargo clean) 2>/dev/null || true
 
 echo -e "${YELLOW}Building... This may take a few minutes...${NC}"
