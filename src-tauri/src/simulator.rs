@@ -888,7 +888,7 @@ fn prepare_ngspice_netlist(netlist: &str, raw_path: &PathBuf) -> String {
     lines.join("\n")
 }
 
-/// Parse ngspice raw file format (supports both ASCII and binary)
+/// Parse ngspice raw file format (supports both ASCII and binary, including complex numbers for AC analysis)
 fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn std::error::Error + Send + Sync>> {
     // Read the entire file as bytes first
     let data = std::fs::read(path)?;
@@ -899,12 +899,15 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
     let mut num_points = 0;
     let mut variables: Vec<(String, String)> = Vec::new();
     let mut analysis_type = "transient".to_string();
+    let mut x_axis_label = "time".to_string();
     let mut is_binary = false;
+    let mut is_complex = false; // AC analysis uses complex numbers
     let mut data_start_offset = 0;
 
     // Parse header line by line until we hit Values: or Binary:
     let mut in_variables = false;
     let mut line_start = 0;
+    let mut var_index = 0;
 
     for (i, &byte) in data.iter().enumerate() {
         if byte == b'\n' {
@@ -925,6 +928,11 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
                     } else {
                         analysis_type = "transient".to_string();
                     }
+                } else if line.starts_with("Flags:") {
+                    // Check for complex flag (used in AC analysis)
+                    let flags = line.to_lowercase();
+                    is_complex = flags.contains("complex");
+                    log::info!("Flags line: {}, is_complex={}", line, is_complex);
                 } else if line.starts_with("No. Variables:") {
                     if let Some(n) = line.split(':').nth(1) {
                         num_vars = n.trim().parse().unwrap_or(0);
@@ -935,6 +943,7 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
                     }
                 } else if line == "Variables:" {
                     in_variables = true;
+                    var_index = 0;
                 } else if line == "Values:" {
                     is_binary = false;
                     data_start_offset = i + 1;
@@ -948,7 +957,12 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
                     if parts.len() >= 3 {
                         let name = parts[1].to_string();
                         let var_type = parts[2].to_string();
+                        // First variable (index 0) is the independent variable
+                        if var_index == 0 {
+                            x_axis_label = name.to_lowercase();
+                        }
                         variables.push((name, var_type));
+                        var_index += 1;
                     }
                 }
             }
@@ -957,8 +971,8 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
         }
     }
 
-    log::info!("ngspice raw file: num_vars={}, num_points={}, is_binary={}, data_offset={}",
-               num_vars, num_points, is_binary, data_start_offset);
+    log::info!("ngspice raw file: num_vars={}, num_points={}, is_binary={}, is_complex={}, data_offset={}",
+               num_vars, num_points, is_binary, is_complex, data_start_offset);
 
     if num_vars == 0 || variables.is_empty() {
         return Err("Could not parse ngspice raw file header".into());
@@ -968,11 +982,13 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
 
     if is_binary {
         // Parse binary data - ngspice uses float64 for all values
+        // For complex data, each variable has 2 float64 values (real, imaginary)
         let binary_data = &data[data_start_offset..];
-        let bytes_per_point = num_vars * 8; // All float64
+        let values_per_var = if is_complex { 2 } else { 1 };
+        let bytes_per_point = num_vars * values_per_var * 8; // All float64
 
-        log::info!("Parsing binary data: {} bytes, expecting {} points x {} vars x 8 bytes = {} bytes",
-                   binary_data.len(), num_points, num_vars, num_points * bytes_per_point);
+        log::info!("Parsing binary data: {} bytes, expecting {} points x {} vars x {} values x 8 bytes = {} bytes",
+                   binary_data.len(), num_points, num_vars, values_per_var, num_points * bytes_per_point);
 
         for point in 0..num_points {
             let point_offset = point * bytes_per_point;
@@ -982,36 +998,103 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
             }
 
             for var in 0..num_vars {
-                let offset = point_offset + var * 8;
-                if let Ok(value) = read_f64_le(binary_data, offset) {
-                    all_data[var].push(value);
+                if is_complex {
+                    // Read real and imaginary parts, compute magnitude
+                    let real_offset = point_offset + var * 16; // 2 x 8 bytes per complex value
+                    let imag_offset = real_offset + 8;
+                    if let (Ok(real), Ok(imag)) = (read_f64_le(binary_data, real_offset), read_f64_le(binary_data, imag_offset)) {
+                        // For the independent variable (frequency), just use the real part
+                        // For other variables, compute magnitude: sqrt(real² + imag²)
+                        let value = if var == 0 {
+                            real // Frequency is real
+                        } else {
+                            (real * real + imag * imag).sqrt() // Magnitude for voltages/currents
+                        };
+                        all_data[var].push(value);
+                    }
+                } else {
+                    let offset = point_offset + var * 8;
+                    if let Ok(value) = read_f64_le(binary_data, offset) {
+                        all_data[var].push(value);
+                    }
                 }
             }
         }
     } else {
         // Parse ASCII values
+        // ngspice ASCII format for complex data:
+        //   <point_index>\t<real>,<imag>   <- first variable (frequency)
+        //   \t<real>,<imag>                <- second variable
+        //   \t<real>,<imag>                <- third variable, etc.
+        // For real data, values are just single numbers
         let values_data = &data[data_start_offset..];
         if let Ok(values_str) = std::str::from_utf8(values_data) {
-            let mut current_point_data: Vec<f64> = Vec::new();
+            let mut current_var_index = 0;
 
             for line in values_str.lines() {
-                let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
 
-                for part in line.split_whitespace() {
-                    if let Ok(value) = part.parse::<f64>() {
-                        current_point_data.push(value);
+                // Check if this is a new point (starts with point index)
+                // New points start with optional whitespace, then a digit
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
 
-                        if current_point_data.len() == num_vars {
-                            for (i, &val) in current_point_data.iter().enumerate() {
-                                if i < all_data.len() {
-                                    all_data[i].push(val);
-                                }
+                // Determine if this is a new point or continuation
+                let is_new_point = trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false);
+
+                if is_new_point {
+                    // New data point - reset variable index
+                    current_var_index = 0;
+                }
+
+                // Extract the value part (after index for new points, or the whole line for continuations)
+                let value_part = if is_new_point {
+                    // Skip the point index - find the tab separator
+                    if let Some(tab_pos) = trimmed.find('\t') {
+                        &trimmed[tab_pos + 1..]
+                    } else {
+                        // No tab found, try space separation
+                        trimmed.split_whitespace().nth(1).unwrap_or("")
+                    }
+                } else {
+                    // Continuation line - just trim the leading whitespace
+                    trimmed
+                };
+
+                let value_part = value_part.trim();
+                if value_part.is_empty() {
+                    continue;
+                }
+
+                if is_complex {
+                    // Parse complex value: "real,imag"
+                    let parts: Vec<&str> = value_part.split(',').collect();
+                    if parts.len() >= 2 {
+                        if let (Ok(real), Ok(imag)) = (parts[0].trim().parse::<f64>(), parts[1].trim().parse::<f64>()) {
+                            // For frequency (var 0), use real part; for others, compute magnitude
+                            let value = if current_var_index == 0 {
+                                real
+                            } else {
+                                (real * real + imag * imag).sqrt()
+                            };
+
+                            if current_var_index < all_data.len() {
+                                all_data[current_var_index].push(value);
                             }
-                            current_point_data.clear();
+                            current_var_index += 1;
                         }
+                    }
+                } else {
+                    // Parse real value
+                    if let Ok(value) = value_part.parse::<f64>() {
+                        if current_var_index < all_data.len() {
+                            all_data[current_var_index].push(value);
+                        }
+                        current_var_index += 1;
                     }
                 }
             }
@@ -1020,8 +1103,8 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
         }
     }
 
-    log::info!("Parsed ngspice raw: num_vars={}, num_points={}, actual_points={}",
-               num_vars, num_points, all_data.get(0).map(|v| v.len()).unwrap_or(0));
+    log::info!("Parsed ngspice raw: num_vars={}, num_points={}, actual_points={}, is_complex={}",
+               num_vars, num_points, all_data.get(0).map(|v| v.len()).unwrap_or(0), is_complex);
 
     if all_data.is_empty() || all_data[0].is_empty() {
         return Err("Could not parse ngspice raw file - no data found".into());
@@ -1033,12 +1116,13 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
     let traces: Vec<Trace> = variables
         .iter()
         .enumerate()
-        .skip(1) // Skip time variable
+        .skip(1) // Skip time/frequency variable
         .map(|(i, (name, var_type))| {
             let unit = match var_type.as_str() {
                 "voltage" => "V",
                 "current" => "A",
                 "time" => "s",
+                "frequency" => "Hz",
                 _ => "",
             };
             Trace {
@@ -1053,6 +1137,7 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
         time,
         traces,
         analysis_type,
+        x_axis_label: Some(x_axis_label),
     })
 }
 
@@ -1251,10 +1336,16 @@ fn parse_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn std::erro
         "transient"
     };
 
+    // Get the x-axis label from the first variable name
+    let x_axis_label = variables.first()
+        .map(|(name, _)| name.to_lowercase())
+        .unwrap_or_else(|| "time".to_string());
+
     Ok(SimulationResults {
         time,
         traces,
         analysis_type: analysis_type.to_string(),
+        x_axis_label: Some(x_axis_label),
     })
 }
 

@@ -108,9 +108,14 @@ echo -e "  ${GREEN}✓${NC} APPLE_TEAM_ID: $APPLE_TEAM_ID"
 echo -e "  ${GREEN}✓${NC} APPLE_ID: $APPLE_ID"
 echo -e "  ${GREEN}✓${NC} APPLE_PASSWORD: [set]"
 
-# Step 1: Build with Tauri (handles signing and .app notarization)
+# Step 1: Clean and build with Tauri (handles signing and .app notarization)
 echo -e "\n${GREEN}Step 1/5: Building Tauri app (includes signing & .app notarization)...${NC}"
-echo -e "${YELLOW}This may take a few minutes...${NC}"
+
+# Clean previous build to ensure fresh compilation
+echo -e "${BLUE}Cleaning previous build...${NC}"
+(cd src-tauri && cargo clean) 2>/dev/null || true
+
+echo -e "${YELLOW}Building... This may take a few minutes...${NC}"
 
 APP_PATH="src-tauri/target/release/bundle/macos/KeliCAD Agent.app"
 DMG_PATH="src-tauri/target/release/bundle/dmg/KeliCAD Agent_1.0.0_aarch64.dmg"

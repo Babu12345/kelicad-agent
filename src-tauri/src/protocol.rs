@@ -20,6 +20,8 @@ pub struct SimulationResults {
     pub time: Vec<f64>,
     pub traces: Vec<Trace>,
     pub analysis_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x_axis_label: Option<String>,
 }
 
 /// Agent capabilities
@@ -397,6 +399,7 @@ mod tests {
                     },
                 ],
                 analysis_type: "transient".to_string(),
+                x_axis_label: Some("time".to_string()),
             }),
             error: None,
             execution_time: 1500,
