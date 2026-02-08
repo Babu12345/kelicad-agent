@@ -921,11 +921,16 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
 
                 if line.starts_with("Plotname:") {
                     let plotname = line.split(':').nth(1).map(|s| s.trim().to_lowercase()).unwrap_or_default();
-                    if plotname.contains("ac") {
-                        analysis_type = "ac".to_string();
-                    } else if plotname.contains("dc") {
+                    // Check for specific analysis types - order matters to avoid false matches
+                    // "DC transfer characteristic" contains "ac" in "characteristic", so check DC first
+                    if plotname.contains("dc") || plotname.contains("operating point") {
                         analysis_type = "dc".to_string();
+                    } else if plotname.contains("ac analysis") || plotname.starts_with("ac ") {
+                        analysis_type = "ac".to_string();
+                    } else if plotname.contains("transient") {
+                        analysis_type = "transient".to_string();
                     } else {
+                        // Default to transient for unknown analysis types
                         analysis_type = "transient".to_string();
                     }
                 } else if line.starts_with("Flags:") {
@@ -1037,14 +1042,18 @@ fn parse_ngspice_raw_file(path: &PathBuf) -> Result<SimulationResults, Box<dyn s
                 }
 
                 // Check if this is a new point (starts with point index)
-                // New points start with optional whitespace, then a digit
+                // New points: " <index>\t<value>" -> after trim: "<index>\t<value>" (has tab)
+                // Continuation: "\t<value>" -> after trim: "<value>" (no tab)
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
 
                 // Determine if this is a new point or continuation
-                let is_new_point = trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false);
+                // A new point line has "index\tvalue" format (contains tab and starts with digit)
+                // A continuation line has just "value" (no tab after trimming)
+                let is_new_point = trimmed.contains('\t') &&
+                    trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false);
 
                 if is_new_point {
                     // New data point - reset variable index
