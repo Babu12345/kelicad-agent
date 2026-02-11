@@ -889,9 +889,85 @@ fn extract_ngspice_error(output: &str) -> Option<String> {
             .into_iter()
             .filter(|line| seen.insert(line.clone()))
             .collect();
-        Some(unique_lines.join("\n"))
+
+        let mut error_message = unique_lines.join("\n");
+
+        // Add KeliCAD recommendations for common mistakes
+        if let Some(recommendations) = get_kelicad_recommendations(output) {
+            error_message.push_str("\n\n");
+            error_message.push_str(&recommendations);
+        }
+
+        Some(error_message)
     } else if found_error {
         Some("ngspice simulation failed".to_string())
+    } else {
+        None
+    }
+}
+
+/// Get KeliCAD-specific recommendations for common SPICE mistakes
+fn get_kelicad_recommendations(output: &str) -> Option<String> {
+    let lower = output.to_lowercase();
+    let mut recommendations: Vec<&str> = Vec::new();
+
+    // PWL on resistor (resistors don't support PWL)
+    if (lower.contains("pwl") && lower.contains("resistor")) ||
+       lower.contains("unknown parameter") && lower.contains("pwl") {
+        recommendations.extend_from_slice(&[
+            "💡 KeliCAD Tip: Resistors cannot use PWL (Piece-Wise Linear). PWL is only for voltage/current sources.",
+            "Alternatives for variable resistance:",
+            "  • Use a fixed resistor: Rload node1 node2 10k",
+            "  • Use a behavioral current source: Gload node1 node2 cur='V(node1)/R_value'",
+            "  • Use ngspice behavioral resistor: Rload node1 node2 r='table(time, 0, 10, 1, 20)'"
+        ]);
+    }
+
+    // Floating node
+    if lower.contains("floating") || lower.contains("no dc path to ground") {
+        recommendations.extend_from_slice(&[
+            "💡 KeliCAD Tip: Floating node detected - every node needs a DC path to ground.",
+            "Solutions:",
+            "  • Add a high-value resistor to ground: Rbias floating_node 0 1G",
+            "  • Check that all components are properly connected"
+        ]);
+    }
+
+    // Voltage source loop
+    if lower.contains("voltage source loop") || lower.contains("voltage loop") {
+        recommendations.extend_from_slice(&[
+            "💡 KeliCAD Tip: Voltage sources in parallel create an invalid circuit.",
+            "Solutions:",
+            "  • Add a small series resistance between voltage sources",
+            "  • Remove one of the parallel voltage sources"
+        ]);
+    }
+
+    // Inductor loop / current source cutset
+    if lower.contains("inductor loop") || lower.contains("current source cutset") {
+        recommendations.extend_from_slice(&[
+            "💡 KeliCAD Tip: Current sources in series or inductors in loops need damping.",
+            "Solutions:",
+            "  • Add a parallel resistor across inductors",
+            "  • Ensure current sources have parallel paths"
+        ]);
+    }
+
+    // Missing .end
+    if lower.contains("missing .end") || lower.contains("no .end") {
+        recommendations.push("💡 KeliCAD Tip: Every netlist must end with .end directive.");
+    }
+
+    // Unknown device/model
+    if lower.contains("unknown device") || lower.contains("unknown model") || lower.contains("model not found") {
+        recommendations.extend_from_slice(&[
+            "💡 KeliCAD Tip: Make sure to include the model library with .include or .lib directive.",
+            "Example: .include standard.lib"
+        ]);
+    }
+
+    if !recommendations.is_empty() {
+        Some(recommendations.join("\n"))
     } else {
         None
     }
