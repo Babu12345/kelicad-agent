@@ -816,16 +816,9 @@ pub async fn run_ngspice_simulation(
     }
 
     // Check for fatal errors in output
-    if stderr.to_lowercase().contains("error") || stdout.to_lowercase().contains("error:") {
-        // Check if it's a real error (not just "0 errors")
-        let error_lines: Vec<&str> = stdout.lines()
-            .chain(stderr.lines())
-            .filter(|l| l.to_lowercase().contains("error") && !l.contains("0 error"))
-            .collect();
-
-        if !error_lines.is_empty() {
-            return Err(format!("ngspice error: {}", error_lines.join("\n")).into());
-        }
+    let combined_output = format!("{}\n{}", stdout, stderr);
+    if let Some(error_msg) = extract_ngspice_error(&combined_output) {
+        return Err(error_msg.into());
     }
 
     // Check if raw file exists
@@ -841,6 +834,67 @@ pub async fn run_ngspice_simulation(
     let results = parse_ngspice_raw_file(&raw_path)?;
 
     Ok(results)
+}
+
+/// Extract meaningful error message from ngspice output
+/// Returns Some(error_message) if errors found, None otherwise
+fn extract_ngspice_error(output: &str) -> Option<String> {
+    let lines: Vec<&str> = output.lines().collect();
+    let mut error_lines: Vec<String> = Vec::new();
+    let mut found_error = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let lower = line.to_lowercase();
+
+        // Skip notes and warnings, and "0 error" lines
+        if lower.contains("note:") || lower.contains("warning:") || lower.contains("0 error") {
+            continue;
+        }
+
+        // Capture error lines and context
+        if lower.contains("error") {
+            found_error = true;
+
+            // Include previous line if it has line number info
+            if i > 0 {
+                let prev = lines[i - 1];
+                if prev.to_lowercase().contains("line") && prev.contains(char::is_numeric) {
+                    if !error_lines.contains(&prev.trim().to_string()) {
+                        error_lines.push(prev.trim().to_string());
+                    }
+                }
+            }
+
+            error_lines.push(line.trim().to_string());
+
+            // Include next line if it's a continuation (indented or has more detail)
+            if i + 1 < lines.len() {
+                let next = lines[i + 1];
+                if next.starts_with(' ') || next.starts_with('\t') {
+                    error_lines.push(next.trim().to_string());
+                }
+            }
+        }
+        // Also capture "Error on line X" or "line X:" context
+        else if lower.contains("error on line") || (lower.contains("line") && lower.contains(':') && line.contains(char::is_numeric)) {
+            error_lines.push(line.trim().to_string());
+            found_error = true;
+        }
+    }
+
+    if !error_lines.is_empty() {
+        // Deduplicate while preserving order
+        let mut seen = std::collections::HashSet::new();
+        let unique_lines: Vec<String> = error_lines
+            .into_iter()
+            .filter(|line| seen.insert(line.clone()))
+            .collect();
+        Some(unique_lines.join("\n"))
+    } else if found_error {
+        Some("ngspice simulation failed".to_string())
+    } else {
+        None
+    }
 }
 
 /// Prepare netlist for ngspice with .control section
@@ -1847,5 +1901,54 @@ Values:
         // This test verifies the function exists and returns an Option
         let result = detect_ngspice();
         assert!(result.is_some() || result.is_none());
+    }
+
+    #[test]
+    fn test_extract_ngspice_error_with_line_number() {
+        let output = r#"Circuit: * test
+Note: some note here
+Error on line 14 or its substitute:
+    Simulation interrupted due to error!
+"#;
+        let error = extract_ngspice_error(output);
+        assert!(error.is_some());
+        let msg = error.unwrap();
+        assert!(msg.contains("Error on line 14"));
+        assert!(msg.contains("Simulation interrupted"));
+    }
+
+    #[test]
+    fn test_extract_ngspice_error_no_error() {
+        let output = r#"Circuit: * test
+Note: no problems
+Simulation completed with 0 errors
+"#;
+        let error = extract_ngspice_error(output);
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn test_extract_ngspice_error_skips_notes() {
+        let output = r#"Note: this is a note
+Warning: this is a warning
+Error: real error here
+"#;
+        let error = extract_ngspice_error(output);
+        assert!(error.is_some());
+        let msg = error.unwrap();
+        assert!(msg.contains("real error here"));
+        assert!(!msg.contains("this is a note"));
+    }
+
+    #[test]
+    fn test_extract_ngspice_error_includes_context() {
+        let output = r#"line 5:
+Error: Unknown device
+    Did you mean R1?
+"#;
+        let error = extract_ngspice_error(output);
+        assert!(error.is_some());
+        let msg = error.unwrap();
+        assert!(msg.contains("Error: Unknown device"));
     }
 }
